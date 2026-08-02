@@ -22,3 +22,6 @@ tower-http = { version = "0.7.0", features = ["fs"] }
 [profile.release]
 lto = true
 strip = true
+
+[build-dependencies]
+cc = "1.4.0"

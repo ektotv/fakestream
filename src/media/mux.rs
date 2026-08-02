@@ -1,6 +1,7 @@
 //! Writing a clip. Encoders in, container out.
 
 use super::{MediaError, context, ffi, source::Beeps, source::paint_pattern};
+use crate::captions::{cea608, script::Cue};
 use rsmpeg::avcodec::{AVCodec, AVCodecContext};
 use rsmpeg::avformat::AVFormatContextOutput;
 use rsmpeg::avutil::{AVChannelLayout, AVFrame};
@@ -17,6 +18,8 @@ pub struct ClipSpec {
     pub video_bitrate: i64,
     pub sample_rate: i32,
     pub channels: u32,
+    /// Captions carried in the video's SEI. Empty means none.
+    pub cea608_cues: Vec<Cue>,
 }
 
 impl Default for ClipSpec {
@@ -29,6 +32,7 @@ impl Default for ClipSpec {
             video_bitrate: 2_000_000,
             sample_rate: 48_000,
             channels: 2,
+            cea608_cues: Vec::new(),
         }
     }
 }
@@ -86,6 +90,11 @@ pub fn write_clip(path: &CStr, spec: &ClipSpec) -> Result<(), MediaError> {
     let total_frames = spec.total_video_frames();
     let mut samples_written: i64 = 0;
 
+    let captions = context(
+        "scheduling captions",
+        cea608::schedule(&spec.cea608_cues, spec.fps, total_frames),
+    )?;
+
     for index in 0..total_frames {
         // Keep audio level with video rather than writing one stream then the
         // other, so the muxer never has to buffer a whole track.
@@ -114,6 +123,14 @@ pub fn write_clip(path: &CStr, spec: &ClipSpec) -> Result<(), MediaError> {
             beeps.beeping_at(frame_first_sample),
         )?;
         picture.set_pts(index);
+
+        // Side data does not survive a frame being reused, but clearing is
+        // still explicit, since a stale caption riding a later frame would be
+        // near impossible to spot in the output.
+        ffi::clear_captions(&mut picture);
+        if !spec.cea608_cues.is_empty() {
+            ffi::attach_captions(&mut picture, &captions.at(index as usize))?;
+        }
 
         context("encoding video", video.send_frame(Some(&picture)))?;
         drain(&mut video, &mut output, 0, spec.video_time_base(), video_stream_tb)?;

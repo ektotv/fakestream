@@ -5,7 +5,7 @@ spikes/c/build/
 spikes/go/fakestream-go
 spikes/rust/target/
 
-# vendored third-party sources, fetched not committed
+# scratch clones used while investigating, not part of the build
 vendor/
 
 # generated fixtures
