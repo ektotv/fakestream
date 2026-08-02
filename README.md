@@ -13,8 +13,23 @@ Licensed GPL-3.0. The system ffmpeg here is built `--enable-gpl
 
 ## Status
 
-Spike complete, language and architecture decided. See the Conclusion. The tool
-itself is not built yet.
+Early. The generation spine and the HTTP server work, with one VOD fixture. The
+caption formats proven in the spike are being ported in next.
+
+The spike that decided the language and architecture is preserved in commit
+`1012378`, and its findings are kept below because they remain the reasoning
+behind the design.
+
+## Usage
+
+```
+fakestream serve              # generate any missing fixtures, then serve them
+fakestream serve --port 9000
+fakestream build --dir /tmp/fixtures
+```
+
+Fixtures are generated on first run and cached, so starting the server a second
+time is immediate. Point a player at the index to see every available URL.
 
 ## Why a spike
 

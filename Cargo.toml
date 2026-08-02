@@ -1,0 +1,24 @@
+[package]
+name = "fakestream"
+version = "0.1.0"
+edition = "2024"
+description = "Generates synthetic test video for people building AV players"
+license = "GPL-3.0-or-later"
+
+[features]
+# Development links the ffmpeg already on the machine, which keeps the build
+# loop fast. Release builds swap in a vendored static ffmpeg so the binary is
+# self contained.
+default = ["system-ffmpeg"]
+system-ffmpeg = ["rsmpeg/link_system_ffmpeg"]
+
+[dependencies]
+rsmpeg = { version = "0.18", default-features = false, features = ["ffmpeg8"] }
+ab_glyph = "0.2"
+axum = "0.8.9"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net"] }
+tower-http = { version = "0.7.0", features = ["fs"] }
+
+[profile.release]
+lto = true
+strip = true
