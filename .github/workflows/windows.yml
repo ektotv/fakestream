@@ -23,7 +23,8 @@ jobs:
           update: true
           # Deliberately no compilers. Everything is built with MSVC so it
           # links against a normal windows-msvc Rust build, and having gcc on
-          # the path invites configure to pick it.
+          # the path invites configure to pick it. pkgconf is how ffmpeg's
+          # configure finds the x264 built beside it.
           install: >-
             make
             diffutils
@@ -31,6 +32,7 @@ jobs:
             git
             curl
             tar
+            pkgconf
 
       # Puts cl.exe and the Windows SDK on the path for the steps that follow.
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0

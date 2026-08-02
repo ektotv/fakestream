@@ -52,7 +52,8 @@ cd "$WORK"
 # x264 is built here rather than taken from the system. Homebrew ships both a
 # static and a shared library in one directory, and the linker prefers the
 # shared one, which would leave the finished binary depending on it.
-if [ ! -f "$PREFIX/lib/libx264.a" ]; then
+# MSVC names the library libx264.lib, everything else libx264.a.
+if [ ! -f "$PREFIX/lib/libx264.a" ] && [ ! -f "$PREFIX/lib/libx264.lib" ]; then
   echo "building x264"
   if [ ! -d x264 ]; then
     git clone -q --depth 1 https://code.videolan.org/videolan/x264.git
@@ -61,9 +62,10 @@ if [ ! -f "$PREFIX/lib/libx264.a" ]; then
     cd x264
     x264_args=(--prefix="$PREFIX" --enable-static --disable-cli --disable-opencl)
     if [ "$WINDOWS" = "1" ]; then
-      # x264 has no --toolchain switch, so MSVC is selected by naming the
-      # compiler and the host it is building for.
-      x264_args+=(--host=x86_64-pc-windows-msvc)
+      # x264 picks MSVC from the compiler's name, not from a host triple, and
+      # only once the host already looks like msys, mingw or cygwin. So the
+      # host is left to be detected and only the compiler is named. Passing a
+      # windows-msvc triple is rejected by config.sub before that is reached.
       export CC=cl
     fi
     ./configure "${x264_args[@]}"
