@@ -4,6 +4,7 @@
 pub mod ffi;
 pub mod mux;
 pub mod source;
+pub mod subtitles;
 pub mod verify;
 
 pub use ffi::FfiError;

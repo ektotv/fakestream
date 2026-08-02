@@ -4,6 +4,7 @@
 
 use fakestream::captions::script::lorem_cues;
 use fakestream::media::mux::{ClipSpec, write_clip};
+use fakestream::media::subtitles::{SubtitleFormat, SubtitleTrack};
 use fakestream::media::verify::{StreamKind, inspect, subtitle_events};
 use std::ffi::CString;
 
@@ -36,7 +37,12 @@ fn spec() -> ClipSpec {
         height: 480,
         duration_seconds: 12.0,
         video_bitrate: 400_000,
-        dvb_cues: lorem_cues(12.0, 3.0, 2.0),
+        subtitles: vec![SubtitleTrack::new(
+            SubtitleFormat::Dvb,
+            "eng",
+            "English",
+            lorem_cues(12.0, 3.0, 2.0),
+        )],
         ..ClipSpec::default()
     }
 }
@@ -64,13 +70,13 @@ fn every_caption_is_followed_by_a_clear() {
     let spec = spec();
     write_clip(&file.c_path(), &spec).expect("clip should generate");
 
-    let events = subtitle_events(&file.c_path()).expect("subtitles should decode");
+    let events = subtitle_events(&file.c_path(), 0).expect("subtitles should decode");
     assert!(!events.is_empty(), "no subtitle events were decoded");
 
     let captions = events.iter().filter(|event| event.rects > 0).count();
     let clears = events.iter().filter(|event| event.rects == 0).count();
 
-    assert_eq!(captions, spec.dvb_cues.len());
+    assert_eq!(captions, spec.subtitles[0].cues.len());
     assert_eq!(clears, captions, "every caption needs a clear after it");
 }
 
@@ -80,13 +86,13 @@ fn captions_and_clears_land_when_the_cues_asked() {
     let spec = spec();
     write_clip(&file.c_path(), &spec).expect("clip should generate");
 
-    let events = subtitle_events(&file.c_path()).expect("subtitles should decode");
+    let events = subtitle_events(&file.c_path(), 0).expect("subtitles should decode");
 
     // MPEG-TS applies a small start offset to every stream, so compare against
     // the first event rather than against zero.
-    let offset = events[0].at - spec.dvb_cues[0].start;
+    let offset = events[0].at - spec.subtitles[0].cues[0].start;
 
-    for (index, cue) in spec.dvb_cues.iter().enumerate() {
+    for (index, cue) in spec.subtitles[0].cues.iter().enumerate() {
         let caption = &events[index * 2];
         let clear = &events[index * 2 + 1];
 
@@ -115,7 +121,7 @@ fn captions_and_clears_land_when_the_cues_asked() {
 fn a_clip_without_cues_has_no_subtitle_stream() {
     let file = TempFile::new("none.ts");
     let spec = ClipSpec {
-        dvb_cues: Vec::new(),
+        subtitles: Vec::new(),
         ..spec()
     };
     write_clip(&file.c_path(), &spec).expect("clip should generate");

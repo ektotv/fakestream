@@ -85,20 +85,28 @@ pub struct SubtitleEvent {
     pub at: f64,
     /// Regions carried. Zero means the event clears the screen.
     pub rects: usize,
+    /// Text carried, empty for bitmap formats and for clears.
+    pub text: Vec<String>,
 }
 
-/// Decode a file's subtitle stream and report every event in it.
+/// Decode one of a file's subtitle streams and report every event in it.
+///
+/// `track` counts subtitle streams rather than all streams, so zero is the
+/// first subtitle track whatever its stream index.
 ///
 /// Needed because a bitmap subtitle stream cannot be checked by reading text
 /// out of it, and because an empty event, the thing that removes a caption, is
 /// invisible to most tooling.
-pub fn subtitle_events(path: &CStr) -> Result<Vec<SubtitleEvent>, MediaError> {
+pub fn subtitle_events(path: &CStr, track: usize) -> Result<Vec<SubtitleEvent>, MediaError> {
     let mut input = context("opening generated file", AVFormatContextInput::open(path))?;
 
     let Some(index) = input
         .streams()
         .iter()
-        .position(|stream| stream.codecpar().codec_type == sys::AVMEDIA_TYPE_SUBTITLE)
+        .enumerate()
+        .filter(|(_, stream)| stream.codecpar().codec_type == sys::AVMEDIA_TYPE_SUBTITLE)
+        .map(|(position, _)| position)
+        .nth(track)
     else {
         return Ok(Vec::new());
     };
@@ -128,6 +136,7 @@ pub fn subtitle_events(path: &CStr) -> Result<Vec<SubtitleEvent>, MediaError> {
             events.push(SubtitleEvent {
                 at: pts as f64 * f64::from(time_base.num) / f64::from(time_base.den),
                 rects: ffi::rect_geometry(&subtitle).len(),
+                text: ffi::rect_text(&subtitle),
             });
         }
     }

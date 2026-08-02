@@ -7,6 +7,7 @@ use crate::captions::libcaption::Channel;
 use crate::captions::script::{lorem_cues, offset_cues};
 use crate::media::MediaError;
 use crate::media::mux::{ClipSpec, write_clip};
+use crate::media::subtitles::{SubtitleFormat, SubtitleTrack};
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
 
@@ -119,12 +120,142 @@ pub fn catalogue() -> Vec<Fixture> {
             delivery: Delivery::Vod,
             spec: ClipSpec {
                 duration_seconds: 30.0,
-                dvb_cues: lorem_cues(30.0, 3.0, 2.5),
+                subtitles: vec![SubtitleTrack::new(
+                    SubtitleFormat::Dvb,
+                    "eng",
+                    "English (DVB bitmap)",
+                    lorem_cues(30.0, 3.0, 2.5),
+                )],
+                ..ClipSpec::default()
+            },
+        },
+        Fixture {
+            id: "vod-mp4-tx3g",
+            title: "MP4 with tx3g timed text",
+            purpose: "The usual subtitle format inside MP4. The player renders \
+                      the text itself, so this tests its font handling, line \
+                      breaking and placement rather than ours.",
+            route: "vod/tx3g.mp4",
+            delivery: Delivery::Vod,
+            spec: ClipSpec {
+                duration_seconds: 30.0,
+                subtitles: vec![SubtitleTrack::new(
+                    SubtitleFormat::Tx3g,
+                    "eng",
+                    "English",
+                    lorem_cues(30.0, 3.0, 2.5),
+                )],
+                ..ClipSpec::default()
+            },
+        },
+        Fixture {
+            id: "vod-mp4-ttml",
+            title: "MP4 with TTML timed text",
+            purpose: "Carried in MP4 as stpp, and what DASH and CMAF use. A \
+                      player that handles tx3g may still not handle this.",
+            route: "vod/ttml.mp4",
+            delivery: Delivery::Vod,
+            spec: ClipSpec {
+                duration_seconds: 30.0,
+                subtitles: vec![SubtitleTrack::new(
+                    SubtitleFormat::Ttml,
+                    "eng",
+                    "English",
+                    lorem_cues(30.0, 3.0, 2.5),
+                )],
+                ..ClipSpec::default()
+            },
+        },
+        Fixture {
+            id: "vod-mkv-subrip",
+            title: "Matroska with SubRip subtitles",
+            purpose: "Plain text subtitles with no styling, the simplest case a \
+                      player can be asked to render.",
+            route: "vod/subrip.mkv",
+            delivery: Delivery::Vod,
+            spec: ClipSpec {
+                duration_seconds: 30.0,
+                subtitles: vec![SubtitleTrack::new(
+                    SubtitleFormat::SubRip,
+                    "eng",
+                    "English",
+                    lorem_cues(30.0, 3.0, 2.5),
+                )],
+                ..ClipSpec::default()
+            },
+        },
+        Fixture {
+            id: "vod-mkv-ass",
+            title: "Matroska with ASS subtitles",
+            purpose: "ASS carries styling and positioning, so it exercises far \
+                      more of a renderer than SubRip does.",
+            route: "vod/ass.mkv",
+            delivery: Delivery::Vod,
+            spec: ClipSpec {
+                duration_seconds: 30.0,
+                subtitles: vec![SubtitleTrack::new(
+                    SubtitleFormat::Ass,
+                    "eng",
+                    "English",
+                    lorem_cues(30.0, 3.0, 2.5),
+                )],
+                ..ClipSpec::default()
+            },
+        },
+        Fixture {
+            id: "vod-mkv-webvtt",
+            title: "Matroska with WebVTT subtitles",
+            purpose: "WebVTT away from HLS. Its usual home is a separate HLS \
+                      rendition, which is not built yet.",
+            route: "vod/webvtt.mkv",
+            delivery: Delivery::Vod,
+            spec: ClipSpec {
+                duration_seconds: 30.0,
+                subtitles: vec![SubtitleTrack::new(
+                    SubtitleFormat::WebVtt,
+                    "eng",
+                    "English",
+                    lorem_cues(30.0, 3.0, 2.5),
+                )],
+                ..ClipSpec::default()
+            },
+        },
+        Fixture {
+            id: "vod-mkv-multilingual",
+            title: "Matroska with subtitles in four languages",
+            purpose: "Four tracks tagged eng, fra, spa and jpn, each with \
+                      visibly different text. Tests track listing, language \
+                      labelling, switching, and whether a player can honour a \
+                      stored language preference.",
+            route: "vod/multilingual.mkv",
+            delivery: Delivery::Vod,
+            spec: ClipSpec {
+                duration_seconds: 30.0,
+                subtitles: LANGUAGES
+                    .iter()
+                    .map(|(tag, label, prefix)| {
+                        SubtitleTrack::new(
+                            SubtitleFormat::SubRip,
+                            tag,
+                            label,
+                            offset_cues(lorem_cues(30.0, 3.0, 2.5), 0.0, prefix),
+                        )
+                    })
+                    .collect(),
                 ..ClipSpec::default()
             },
         },
     ]
 }
+
+/// Languages for the multilingual fixture. The prefix goes in front of every
+/// cue so the track on screen is identifiable without reading the track list.
+const LANGUAGES: [(&str, &str, &str); 4] = [
+    ("eng", "English", "[EN]"),
+    ("fra", "Français", "[FR] Français"),
+    ("spa", "Español", "[ES] Español"),
+    ("jpn", "日本語", "[JA] 日本語"),
+];
 
 #[derive(Debug)]
 pub enum BuildError {
