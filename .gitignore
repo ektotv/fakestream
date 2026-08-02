@@ -1,0 +1,17 @@
+# build output
+build/
+target/
+spikes/c/build/
+spikes/go/fakestream-go
+spikes/rust/target/
+
+# vendored third-party sources, fetched not committed
+vendor/
+
+# generated fixtures
+out/
+*.mp4
+*.ts
+*.m3u8
+*.vtt
+*.srt

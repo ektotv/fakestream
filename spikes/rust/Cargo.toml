@@ -1,0 +1,8 @@
+[package]
+name = "dvb-probe"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ab_glyph = "0.2.32"
+rsmpeg = { version = "0.18", default-features = false, features = ["ffmpeg8", "link_system_ffmpeg"] }
