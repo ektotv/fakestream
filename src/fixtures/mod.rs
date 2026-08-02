@@ -108,6 +108,21 @@ pub fn catalogue() -> Vec<Fixture> {
                 ..ClipSpec::default()
             },
         },
+        Fixture {
+            id: "vod-ts-dvbsub",
+            title: "MPEG-TS with DVB bitmap subtitles",
+            purpose: "Subtitles as pictures on their own announced stream, the \
+                      opposite case to CEA-608. Common on European IPTV. Tests \
+                      whether a player lists the track, decodes the bitmaps and \
+                      places them correctly against the video.",
+            route: "vod/dvbsub.ts",
+            delivery: Delivery::Vod,
+            spec: ClipSpec {
+                duration_seconds: 30.0,
+                dvb_cues: lorem_cues(30.0, 3.0, 2.5),
+                ..ClipSpec::default()
+            },
+        },
     ]
 }
 

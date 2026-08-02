@@ -5,5 +5,7 @@
 //! renders. Text formats carry UTF-8 and the player does everything.
 
 pub mod cea608;
+pub mod dvb;
 pub mod libcaption;
 pub mod script;
+pub mod text;

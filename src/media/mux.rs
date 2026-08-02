@@ -2,6 +2,8 @@
 
 use super::{MediaError, context, ffi, source::Beeps, source::paint_pattern};
 use crate::captions::cea608::{self, ChannelCues};
+use crate::captions::dvb::{self, Layout};
+use crate::captions::script::Cue;
 use rsmpeg::avcodec::{AVCodec, AVCodecContext};
 use rsmpeg::avformat::AVFormatContextOutput;
 use rsmpeg::avutil::{AVChannelLayout, AVFrame};
@@ -21,6 +23,8 @@ pub struct ClipSpec {
     /// Captions carried in the video's SEI, one entry per caption channel.
     /// Empty means none.
     pub cea608: Vec<ChannelCues>,
+    /// Bitmap subtitles carried as their own stream. Empty means none.
+    pub dvb_cues: Vec<Cue>,
 }
 
 impl Default for ClipSpec {
@@ -34,9 +38,14 @@ impl Default for ClipSpec {
             sample_rate: 48_000,
             channels: 2,
             cea608: Vec::new(),
+            dvb_cues: Vec::new(),
         }
     }
 }
+
+/// Milliseconds, which is a natural base for cue timing and is rescaled into
+/// whatever the muxer settles on.
+const SUBTITLE_TIMEBASE: i32 = 1000;
 
 impl ClipSpec {
     fn total_video_frames(&self) -> i64 {
@@ -54,6 +63,13 @@ impl ClipSpec {
         sys::AVRational {
             num: 1,
             den: self.sample_rate,
+        }
+    }
+
+    fn subtitle_time_base(&self) -> sys::AVRational {
+        sys::AVRational {
+            num: 1,
+            den: SUBTITLE_TIMEBASE,
         }
     }
 }
@@ -82,12 +98,23 @@ pub fn write_clip(path: &CStr, spec: &ClipSpec) -> Result<(), MediaError> {
         stream.set_time_base(spec.audio_time_base());
     }
 
+    let mut subtitles = if spec.dvb_cues.is_empty() {
+        None
+    } else {
+        let encoder = open_subtitle_encoder(spec)?;
+        let mut stream = output.new_stream();
+        stream.set_codecpar(encoder.extract_codecpar());
+        stream.set_time_base(spec.subtitle_time_base());
+        Some(encoder)
+    };
+
     context("writing header", output.write_header(&mut None))?;
 
     // write_header is free to replace the time bases just set, and MPEG-TS
     // always does, forcing 90kHz. Read back what the muxer settled on.
     let video_stream_tb = output.streams()[0].time_base;
     let audio_stream_tb = output.streams()[1].time_base;
+    let subtitle_stream_tb = subtitles.as_ref().map(|_| output.streams()[2].time_base);
 
     let mut picture = new_video_frame(spec)?;
     let samples_per_frame = audio.frame_size.max(1024);
@@ -96,6 +123,8 @@ pub fn write_clip(path: &CStr, spec: &ClipSpec) -> Result<(), MediaError> {
 
     let total_frames = spec.total_video_frames();
     let mut samples_written: i64 = 0;
+    let mut subtitle_events = subtitle_events(spec);
+    subtitle_events.reverse();
 
     let captions = context(
         "scheduling captions",
@@ -123,6 +152,18 @@ pub fn write_clip(path: &CStr, spec: &ClipSpec) -> Result<(), MediaError> {
                 audio_stream_tb,
             )?;
             samples_written += i64::from(samples_per_frame);
+        }
+
+        // Subtitle packets go in as their moment arrives, so interleaving
+        // stays monotonic and the muxer never buffers a whole track.
+        if let (Some(encoder), Some(stream_tb)) = (subtitles.as_mut(), subtitle_stream_tb) {
+            while subtitle_events
+                .last()
+                .is_some_and(|event| event.at_seconds <= video_time)
+            {
+                let event = subtitle_events.pop().expect("checked by the guard above");
+                write_subtitle(&mut output, encoder, spec, &event, stream_tb)?;
+            }
         }
 
         // The marker shows on the frames a beep is sounding, which makes audio
@@ -249,3 +290,105 @@ fn new_audio_frame(spec: &ClipSpec, samples: i32) -> Result<AVFrame, MediaError>
     context("allocating audio frame", frame.alloc_buffer())?;
     Ok(frame)
 }
+
+/// One thing to put on the subtitle stream: a caption appearing, or the empty
+/// page that removes it.
+struct SubtitleEvent {
+    at_seconds: f64,
+    /// How long the packet claims to last, which is what a player uses. None
+    /// for a clear.
+    duration_seconds: Option<f64>,
+    cue: Option<Cue>,
+}
+
+/// Flatten cues into an ordered event list.
+///
+/// Each cue becomes an appearance and a removal. The removal matters because a
+/// DVB decoder otherwise leaves the caption up until its own page timeout,
+/// which is tens of seconds and unrelated to the cue.
+fn subtitle_events(spec: &ClipSpec) -> Vec<SubtitleEvent> {
+    let mut events = Vec::with_capacity(spec.dvb_cues.len() * 2);
+
+    for cue in &spec.dvb_cues {
+        events.push(SubtitleEvent {
+            at_seconds: cue.start,
+            duration_seconds: Some(cue.duration),
+            cue: Some(cue.clone()),
+        });
+        events.push(SubtitleEvent {
+            at_seconds: cue.start + cue.duration,
+            duration_seconds: None,
+            cue: None,
+        });
+    }
+
+    events.sort_by(|left, right| {
+        left.at_seconds
+            .partial_cmp(&right.at_seconds)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    events
+}
+
+fn open_subtitle_encoder(spec: &ClipSpec) -> Result<AVCodecContext, MediaError> {
+    let codec =
+        AVCodec::find_encoder_by_name(c"dvbsub").ok_or(MediaError::MissingCodec("dvbsub"))?;
+    let mut encoder = AVCodecContext::new(&codec);
+    // The display the subtitle positions itself against, which is the video.
+    encoder.set_width(spec.width);
+    encoder.set_height(spec.height);
+    encoder.set_time_base(spec.subtitle_time_base());
+    context("opening dvbsub", encoder.open(None))?;
+    Ok(encoder)
+}
+
+/// Encode one event and write it to the subtitle stream.
+fn write_subtitle(
+    output: &mut AVFormatContextOutput,
+    encoder: &mut AVCodecContext,
+    spec: &ClipSpec,
+    event: &SubtitleEvent,
+    stream_tb: sys::AVRational,
+) -> Result<(), MediaError> {
+    let layout = Layout::for_display(spec.width, spec.height);
+
+    let subtitle = match &event.cue {
+        Some(cue) => {
+            let rendered = dvb::render(cue, &layout);
+            ffi::bitmap_subtitle(
+                rendered.x,
+                rendered.y,
+                rendered.canvas.width,
+                rendered.canvas.height,
+                &rendered.canvas.pixels,
+                &crate::captions::text::palette(),
+                (event.duration_seconds.unwrap_or(0.0) * 1000.0) as u32,
+            )?
+        }
+        None => ffi::empty_subtitle(),
+    };
+
+    // Generous, since a caption's encoded size grows with its bitmap and a
+    // short buffer would truncate rather than fail loudly.
+    let mut buffer = vec![0u8; 256 * 1024];
+    let used = ffi::encode_subtitle(encoder, &subtitle, &mut buffer)?;
+    if used == 0 {
+        return Ok(());
+    }
+
+    let mut packet = ffi::from_bytes(&buffer[..used])?;
+    let pts = (event.at_seconds * f64::from(SUBTITLE_TIMEBASE)) as i64;
+    let duration = (event.duration_seconds.unwrap_or(0.0) * f64::from(SUBTITLE_TIMEBASE)) as i64;
+
+    ffi::stamp(&mut packet, SUBTITLE_STREAM_INDEX, pts, duration);
+    ffi::rescale(&mut packet, spec.subtitle_time_base(), stream_tb);
+
+    context(
+        "writing subtitle packet",
+        output.interleaved_write_frame(&mut packet),
+    )?;
+    Ok(())
+}
+
+/// Video is stream zero, audio one, so subtitles follow.
+const SUBTITLE_STREAM_INDEX: i32 = 2;

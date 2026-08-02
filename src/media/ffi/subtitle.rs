@@ -1,7 +1,7 @@
 //! Building bitmap subtitles, which rsmpeg can encode but cannot construct.
 
 use super::FfiError;
-use rsmpeg::avcodec::AVSubtitle;
+use rsmpeg::avcodec::{AVCodecContext, AVSubtitle};
 use rsmpeg::ffi;
 
 /// Geometry read back from a decoded subtitle, used for verification.
@@ -89,6 +89,15 @@ pub fn bitmap_subtitle(
     Ok(subtitle)
 }
 
+/// A subtitle carrying no regions, which is how DVB ends a caption.
+///
+/// Without one the caption stays on screen until the decoder's own page
+/// timeout, which is measured in tens of seconds and has nothing to do with how
+/// long the cue was meant to last.
+pub fn empty_subtitle() -> AVSubtitle {
+    AVSubtitle::new()
+}
+
 /// Read the rect geometry out of a subtitle, for checking a round trip.
 pub fn rect_geometry(subtitle: &AVSubtitle) -> Vec<RectGeometry> {
     // SAFETY: read-only inspection of a subtitle ffmpeg filled in, bounded by
@@ -108,4 +117,36 @@ pub fn rect_geometry(subtitle: &AVSubtitle) -> Vec<RectGeometry> {
             })
             .collect()
     }
+}
+
+/// Encode a subtitle, returning how many bytes were written.
+///
+/// rsmpeg's wrapper discards the length `avcodec_encode_subtitle` returns,
+/// which leaves a caller guessing. Guessing by trimming trailing zeroes is
+/// actively wrong here: a DVB packet ends with an end-of-display-set segment
+/// whose last bytes are `00 00`, so trimming truncates the segment that tells a
+/// decoder the page is complete.
+pub fn encode_subtitle(
+    encoder: &mut AVCodecContext,
+    subtitle: &AVSubtitle,
+    buffer: &mut [u8],
+) -> Result<usize, FfiError> {
+    // SAFETY: the encoder and subtitle are live, and the buffer length is
+    // passed alongside the pointer so ffmpeg cannot write past it.
+    let written = unsafe {
+        ffi::avcodec_encode_subtitle(
+            encoder.as_mut_ptr(),
+            buffer.as_mut_ptr(),
+            buffer.len() as i32,
+            subtitle.as_ptr(),
+        )
+    };
+
+    if written < 0 {
+        return Err(FfiError::Shape(
+            "the subtitle encoder rejected the subtitle",
+        ));
+    }
+
+    Ok(written as usize)
 }

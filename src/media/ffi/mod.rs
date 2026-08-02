@@ -16,7 +16,7 @@ mod subtitle;
 
 pub use frame::{attach_captions, audio_plane, clear_captions, plane_writer};
 pub use packet::{from_bytes, rescale, route, stamp};
-pub use subtitle::{bitmap_subtitle, rect_geometry};
+pub use subtitle::{bitmap_subtitle, empty_subtitle, encode_subtitle, rect_geometry};
 
 /// Anything that can go wrong at the FFI boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
