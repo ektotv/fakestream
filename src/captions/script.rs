@@ -70,6 +70,24 @@ pub fn lorem_cues(duration_seconds: f64, interval: f64, visible: f64) -> Vec<Cue
     cues
 }
 
+/// Shift a set of cues in time and relabel them.
+///
+/// Used to put a second caption channel alongside the first without the two
+/// transmitting at the same moment, since channels share one stream of byte
+/// pairs and interleaving them would slow both down.
+pub fn offset_cues(cues: Vec<Cue>, shift: f64, label: &str) -> Vec<Cue> {
+    cues.into_iter()
+        .map(|cue| {
+            let text = format!("{label} {}", cue.flattened());
+            Cue {
+                start: cue.start + shift,
+                duration: cue.duration,
+                lines: wrap(&text, LINE_LENGTH),
+            }
+        })
+        .collect()
+}
+
 /// Break text into lines no longer than `width`, on word boundaries.
 ///
 /// A word longer than the limit is placed on its own line rather than split,
@@ -156,6 +174,25 @@ mod tests {
         assert!(cues[0].flattened().starts_with("1."));
         assert!(cues[1].flattened().starts_with("2."));
         assert!(cues[2].flattened().starts_with("3."));
+    }
+
+    #[test]
+    fn offsetting_shifts_and_relabels() {
+        let original = lorem_cues(12.0, 3.0, 2.5);
+        let shifted = offset_cues(original.clone(), 1.5, "CC2:");
+
+        assert_eq!(shifted.len(), original.len());
+        assert_eq!(shifted[0].start, original[0].start + 1.5);
+        assert!(shifted[0].flattened().starts_with("CC2:"));
+    }
+
+    #[test]
+    fn offset_cues_still_fit_a_608_row() {
+        for cue in offset_cues(lorem_cues(60.0, 3.0, 2.5), 1.5, "CC2:") {
+            for line in &cue.lines {
+                assert!(line.chars().count() <= LINE_LENGTH, "{line:?} is too wide");
+            }
+        }
     }
 
     #[test]

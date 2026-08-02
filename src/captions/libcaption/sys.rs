@@ -47,9 +47,6 @@ unsafe extern "C" {
 /// Control codes from `eia608_control_t`, only the ones fakestream issues.
 pub const ERASE_DISPLAY_MEMORY: c_int = 0x142C;
 
-/// Channel 1, which is where captions live unless a stream says otherwise.
-pub const DEFAULT_CHANNEL: c_int = 0;
-
 unsafe extern "C" {
     /// Encode a control command into a 608 word, applying channel selection.
     pub fn eia608_control_command(command: c_int, channel: c_int) -> u16;

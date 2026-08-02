@@ -1,7 +1,7 @@
 //! Writing a clip. Encoders in, container out.
 
 use super::{MediaError, context, ffi, source::Beeps, source::paint_pattern};
-use crate::captions::{cea608, script::Cue};
+use crate::captions::cea608::{self, ChannelCues};
 use rsmpeg::avcodec::{AVCodec, AVCodecContext};
 use rsmpeg::avformat::AVFormatContextOutput;
 use rsmpeg::avutil::{AVChannelLayout, AVFrame};
@@ -18,8 +18,9 @@ pub struct ClipSpec {
     pub video_bitrate: i64,
     pub sample_rate: i32,
     pub channels: u32,
-    /// Captions carried in the video's SEI. Empty means none.
-    pub cea608_cues: Vec<Cue>,
+    /// Captions carried in the video's SEI, one entry per caption channel.
+    /// Empty means none.
+    pub cea608: Vec<ChannelCues>,
 }
 
 impl Default for ClipSpec {
@@ -32,7 +33,7 @@ impl Default for ClipSpec {
             video_bitrate: 2_000_000,
             sample_rate: 48_000,
             channels: 2,
-            cea608_cues: Vec::new(),
+            cea608: Vec::new(),
         }
     }
 }
@@ -98,7 +99,7 @@ pub fn write_clip(path: &CStr, spec: &ClipSpec) -> Result<(), MediaError> {
 
     let captions = context(
         "scheduling captions",
-        cea608::schedule(&spec.cea608_cues, spec.fps, total_frames),
+        cea608::schedule(&spec.cea608, spec.fps, total_frames),
     )?;
 
     for index in 0..total_frames {
@@ -141,7 +142,7 @@ pub fn write_clip(path: &CStr, spec: &ClipSpec) -> Result<(), MediaError> {
         // still explicit, since a stale caption riding a later frame would be
         // near impossible to spot in the output.
         ffi::clear_captions(&mut picture);
-        if !spec.cea608_cues.is_empty() {
+        if !spec.cea608.is_empty() {
             ffi::attach_captions(&mut picture, &captions.at(index as usize))?;
         }
 

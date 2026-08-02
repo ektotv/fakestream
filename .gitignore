@@ -16,5 +16,6 @@ out/
 *.vtt
 *.srt
 
-# generated fixture cache
-fixtures/
+# generated fixture cache at the repo root. Anchored, or it would also match
+# src/fixtures, the module that declares them.
+/fixtures/
