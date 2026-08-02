@@ -2,11 +2,13 @@
 //! files and to render the index a player developer browses, so the two cannot
 //! drift apart.
 
+mod cache;
+
 use crate::captions::cea608::ChannelCues;
 use crate::captions::libcaption::Channel;
 use crate::captions::script::{lorem_cues, offset_cues};
 use crate::media::MediaError;
-use crate::media::mux::{ClipSpec, write_clip};
+use crate::media::mux::{ClipSpec, write_clip_reporting};
 use crate::media::subtitles::{SubtitleFormat, SubtitleTrack};
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
@@ -288,13 +290,24 @@ impl From<MediaError> for BuildError {
     }
 }
 
-/// Generate a fixture into the cache, unless it is already there.
+/// Generate a fixture into the cache, unless a current one is already there.
 ///
-/// Returns whether it did any work, which lets the caller report progress
+/// Returns whether it did any work, which lets a caller report progress
 /// without a rebuild looking like a first run.
 pub fn build(fixture: &Fixture, root: &Path) -> Result<bool, BuildError> {
+    build_reporting(fixture, root, &mut |_| {})
+}
+
+/// As [`build`], reporting how far through generation is.
+pub fn build_reporting(
+    fixture: &Fixture,
+    root: &Path,
+    progress: &mut dyn FnMut(f64),
+) -> Result<bool, BuildError> {
     let target = fixture.cache_path(root);
-    if target.exists() {
+    let signature = cache::signature(&fixture.spec);
+
+    if cache::is_current(&target, &signature) {
         return Ok(false);
     }
 
@@ -307,17 +320,18 @@ pub fn build(fixture: &Fixture, root: &Path) -> Result<bool, BuildError> {
 
     // Write to a neighbouring temporary name first, so an interrupted run
     // cannot leave a half written file that later looks complete.
-    //
-    // The extension has to survive that rename, because libavformat picks its
-    // muxer from the filename. A temporary called `.partial` gets no muxer at
-    // all and the write fails before it starts.
-    let partial = temporary_name(&target);
+    let partial = cache::partial_name(&target);
     let c_path = CString::new(partial.to_string_lossy().as_bytes())
         .map_err(|_| BuildError::UnusablePath(partial.clone()))?;
 
-    write_clip(&c_path, &fixture.spec)?;
+    write_clip_reporting(&c_path, &fixture.spec, progress)?;
 
     std::fs::rename(&partial, &target).map_err(|source| BuildError::Io {
+        path: target.clone(),
+        source,
+    })?;
+
+    cache::record(&target, &signature).map_err(|source| BuildError::Io {
         path: target.clone(),
         source,
     })?;
@@ -325,21 +339,53 @@ pub fn build(fixture: &Fixture, root: &Path) -> Result<bool, BuildError> {
     Ok(true)
 }
 
-/// A hidden sibling of `target` that keeps the same extension, so the muxer is
-/// still inferred correctly while the file is being written.
-fn temporary_name(target: &Path) -> PathBuf {
-    match target.file_name().and_then(|name| name.to_str()) {
-        Some(name) => target.with_file_name(format!(".partial-{name}")),
-        None => target.with_file_name(".partial"),
+/// Build everything in the catalogue, reporting as it goes.
+///
+/// Sweeps away anything an interrupted run left behind first. Those files are
+/// hidden, so they never appear in a listing and would otherwise pile up.
+pub fn build_all(root: &Path, watcher: &mut dyn FnMut(Report<'_>)) -> Result<(), BuildError> {
+    let swept = cache::sweep_partials(root);
+    if swept > 0 {
+        watcher(Report::SweptPartials(swept));
     }
+
+    let catalogue = catalogue();
+    for (index, fixture) in catalogue.iter().enumerate() {
+        watcher(Report::Started {
+            fixture,
+            index,
+            total: catalogue.len(),
+        });
+
+        let built = build_reporting(fixture, root, &mut |fraction| {
+            watcher(Report::Progress { fixture, fraction });
+        })?;
+
+        watcher(Report::Finished { fixture, built });
+    }
+
+    Ok(())
 }
 
-/// Build everything in the catalogue.
-pub fn build_all(root: &Path) -> Result<Vec<(Fixture, bool)>, BuildError> {
-    catalogue()
-        .into_iter()
-        .map(|fixture| build(&fixture, root).map(|built| (fixture, built)))
-        .collect()
+/// What a caller is told while the catalogue is being built.
+pub enum Report<'a> {
+    /// Files left by an interrupted run were removed.
+    SweptPartials(usize),
+    Started {
+        fixture: &'a Fixture,
+        index: usize,
+        total: usize,
+    },
+    Progress {
+        fixture: &'a Fixture,
+        /// Zero to one.
+        fraction: f64,
+    },
+    Finished {
+        fixture: &'a Fixture,
+        /// False when a current file was already on disk.
+        built: bool,
+    },
 }
 
 #[cfg(test)]
@@ -362,18 +408,6 @@ mod tests {
         let count = ids.len();
         ids.dedup();
         assert_eq!(ids.len(), count, "two fixtures share an id");
-    }
-
-    #[test]
-    fn the_temporary_name_keeps_the_extension() {
-        // libavformat picks its muxer from the extension, so losing it here
-        // breaks generation before a byte is written.
-        let target = Path::new("fixtures/vod/basic.mp4");
-        let partial = temporary_name(target);
-
-        assert_eq!(partial.extension().and_then(|e| e.to_str()), Some("mp4"));
-        assert_eq!(partial.parent(), target.parent());
-        assert_ne!(partial, target);
     }
 
     #[test]

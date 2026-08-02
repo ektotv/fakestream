@@ -1,8 +1,11 @@
 //! fakestream generates synthetic test video for people building AV players.
 
+use fakestream::media::{Loudness, set_loudness};
+use fakestream::progress::Bar;
 use fakestream::{fixtures, serve};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 const USAGE: &str = "\
 fakestream generates synthetic test video for people building AV players.
@@ -14,6 +17,8 @@ usage:
 options:
   --dir PATH    where generated fixtures are cached (default: ./fixtures)
   --port PORT   port to listen on (default: 8080)
+  --quiet       drop the progress bar, keeping one line per fixture
+  --verbose     let ffmpeg log everything, for diagnosing a bad file
 ";
 
 fn main() {
@@ -25,19 +30,15 @@ fn main() {
         Err(message) => fail(&message),
     };
 
+    set_loudness(if options.verbose {
+        Loudness::Everything
+    } else {
+        Loudness::Errors
+    });
+
     match command {
-        "build" => build(&options.dir),
-        "serve" => {
-            build(&options.dir);
-            let address = SocketAddr::from(([0, 0, 0, 0], options.port));
-            let runtime = match tokio::runtime::Runtime::new() {
-                Ok(runtime) => runtime,
-                Err(error) => fail(&format!("could not start the runtime: {error}")),
-            };
-            if let Err(error) = runtime.block_on(serve::run(options.dir, address)) {
-                fail(&error.to_string());
-            }
-        }
+        "build" => build(&options.dir, options.quiet),
+        "serve" => serve(options),
         "help" | "--help" | "-h" => print!("{USAGE}"),
         other => fail(&format!("unknown command {other}\n\n{USAGE}")),
     }
@@ -46,12 +47,16 @@ fn main() {
 struct Options {
     dir: PathBuf,
     port: u16,
+    quiet: bool,
+    verbose: bool,
 }
 
 impl Options {
     fn parse(arguments: &[String]) -> Result<Self, String> {
         let mut dir = PathBuf::from("fixtures");
         let mut port = 8080u16;
+        let mut quiet = false;
+        let mut verbose = false;
 
         let mut rest = arguments.iter().skip(1);
         while let Some(flag) = rest.next() {
@@ -66,23 +71,92 @@ impl Options {
                         .parse()
                         .map_err(|_| format!("{value} is not a port"))?;
                 }
+                "--quiet" => quiet = true,
+                "--verbose" => verbose = true,
                 other => return Err(format!("unknown option {other}\n\n{USAGE}")),
             }
         }
 
-        Ok(Self { dir, port })
+        Ok(Self {
+            dir,
+            port,
+            quiet,
+            verbose,
+        })
     }
 }
 
-fn build(dir: &std::path::Path) {
-    match fixtures::build_all(dir) {
-        Ok(results) => {
-            for (fixture, built) in results {
-                let state = if built { "generated" } else { "cached" };
-                println!("{state:>9}  {}", fixture.route);
-            }
-        }
+/// Start listening straight away and generate in the background.
+///
+/// Generation takes a couple of minutes, and blocking the server on it means
+/// nothing can even tell you what is happening. The index reports what is ready
+/// and what is still building.
+fn serve(options: Options) {
+    let address = SocketAddr::from(([0, 0, 0, 0], options.port));
+    let fixtures = fixtures::catalogue();
+    let progress = serve::pending(&fixtures);
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(error) => fail(&format!("could not start the runtime: {error}")),
+    };
+
+    // Bind and announce before generation starts. The generation thread draws a
+    // progress bar, so anything printed after it begins lands in the middle of
+    // that line.
+    let listener = match runtime.block_on(serve::bind(address)) {
+        Ok(listener) => listener,
         Err(error) => fail(&error.to_string()),
+    };
+    println!("serving on http://{address}");
+
+    let worker_progress = Arc::clone(&progress);
+    let dir = options.dir.clone();
+    let quiet = options.quiet;
+    std::thread::spawn(move || {
+        let mut bar = Bar::new(quiet);
+        let result = fixtures::build_all(&dir, &mut |report| {
+            record(&worker_progress, &report);
+            bar.handle(report);
+        });
+        if let Err(error) = result {
+            bar.interrupt();
+            eprintln!("generation stopped: {error}");
+        }
+    });
+
+    if let Err(error) = runtime.block_on(serve::run(listener, address, options.dir, progress)) {
+        fail(&error.to_string());
+    }
+}
+
+/// Mirror a generation report into the state the index page reads.
+fn record(progress: &serve::Progress, report: &fixtures::Report<'_>) {
+    let Ok(mut state) = progress.lock() else {
+        return;
+    };
+
+    match report {
+        fixtures::Report::Started { fixture, .. } => {
+            state.insert(fixture.id.to_string(), serve::Readiness::Building(0.0));
+        }
+        fixtures::Report::Progress { fixture, fraction } => {
+            state.insert(
+                fixture.id.to_string(),
+                serve::Readiness::Building(*fraction),
+            );
+        }
+        fixtures::Report::Finished { fixture, .. } => {
+            state.insert(fixture.id.to_string(), serve::Readiness::Ready);
+        }
+        fixtures::Report::SweptPartials(_) => {}
+    }
+}
+
+fn build(dir: &std::path::Path, quiet: bool) {
+    let mut bar = Bar::new(quiet);
+    if let Err(error) = fixtures::build_all(dir, &mut |report| bar.handle(report)) {
+        fail(&error.to_string());
     }
 }
 

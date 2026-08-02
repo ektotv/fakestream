@@ -6,4 +6,5 @@
 pub mod captions;
 pub mod fixtures;
 pub mod media;
+pub mod progress;
 pub mod serve;

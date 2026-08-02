@@ -51,3 +51,26 @@ pub(crate) fn context<T, E: std::fmt::Display>(
         detail: error.to_string(),
     })
 }
+
+/// How much ffmpeg says for itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Loudness {
+    /// Errors only. libx264 and the muxers otherwise print a screen of
+    /// statistics per clip, which shreds any progress display and buries
+    /// anything that actually matters.
+    Errors,
+    /// Everything, for working out why a file came out wrong.
+    Everything,
+}
+
+/// Set how much libav* logs. Affects the whole process, so call it once at
+/// startup.
+pub fn set_loudness(loudness: Loudness) {
+    let level = match loudness {
+        Loudness::Errors => rsmpeg::ffi::AV_LOG_ERROR,
+        Loudness::Everything => rsmpeg::ffi::AV_LOG_DEBUG,
+    };
+
+    // SAFETY: ffmpeg's own global setter, taking a plain integer.
+    unsafe { rsmpeg::ffi::av_log_set_level(level as i32) };
+}

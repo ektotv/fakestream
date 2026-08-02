@@ -79,6 +79,19 @@ impl ClipSpec {
 /// Generate a clip and write it to `path`. The container is inferred from the
 /// file extension, which is how libavformat picks a muxer.
 pub fn write_clip(path: &CStr, spec: &ClipSpec) -> Result<(), MediaError> {
+    write_clip_reporting(path, spec, &mut |_| {})
+}
+
+/// As [`write_clip`], reporting how far through it is.
+///
+/// Generating a clip takes tens of seconds and used to print nothing, which is
+/// indistinguishable from being stuck. The fraction runs from zero to one and
+/// is reported at most once per percent, so a caller can redraw cheaply.
+pub fn write_clip_reporting(
+    path: &CStr,
+    spec: &ClipSpec,
+    progress: &mut dyn FnMut(f64),
+) -> Result<(), MediaError> {
     let mut output = context("creating output", AVFormatContextOutput::create(path))?;
 
     // MP4 and other formats keep codec configuration in the container header
@@ -135,7 +148,16 @@ pub fn write_clip(path: &CStr, spec: &ClipSpec) -> Result<(), MediaError> {
         cea608::schedule(&spec.cea608, spec.fps, total_frames),
     )?;
 
+    let mut last_reported = -1i64;
+
     for index in 0..total_frames {
+        // At most one report per percent, so a caller can redraw cheaply.
+        let percent = index * 100 / total_frames.max(1);
+        if percent != last_reported {
+            last_reported = percent;
+            progress(index as f64 / total_frames.max(1) as f64);
+        }
+
         // Keep audio level with video rather than writing one stream then the
         // other, so the muxer never has to buffer a whole track.
         let video_time = index as f64 / f64::from(spec.fps);
@@ -219,6 +241,7 @@ pub fn write_clip(path: &CStr, spec: &ClipSpec) -> Result<(), MediaError> {
     )?;
 
     context("writing trailer", output.write_trailer())?;
+    progress(1.0);
     Ok(())
 }
 
