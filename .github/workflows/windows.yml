@@ -21,6 +21,10 @@ jobs:
         with:
           msystem: MSYS
           update: true
+          # Without this the action strips the Windows PATH, and the MSVC
+          # environment set up below never reaches the shell, so configure
+          # concludes there is no usable compiler.
+          path-type: inherit
           # Deliberately no compilers. Everything is built with MSVC so it
           # links against a normal windows-msvc Rust build, and having gcc on
           # the path invites configure to pick it. pkgconf is how ffmpeg's
