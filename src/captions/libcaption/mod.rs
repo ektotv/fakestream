@@ -42,7 +42,10 @@ impl std::fmt::Display for CaptionError {
             Self::OutOfMemory => write!(formatter, "libcaption allocation failed"),
             Self::Rejected(code) => write!(formatter, "libcaption rejected the text, code {code}"),
             Self::UnexpectedPayload => {
-                write!(formatter, "libcaption produced a payload without the expected ATSC header")
+                write!(
+                    formatter,
+                    "libcaption produced a payload without the expected ATSC header"
+                )
             }
         }
     }
@@ -136,7 +139,7 @@ fn triplets_from(payload: &[u8]) -> Result<Vec<Triplet>, CaptionError> {
     }
 
     let body = &payload[PAYLOAD_PREFIX..payload.len() - PAYLOAD_SUFFIX];
-    if body.len() % 3 != 0 {
+    if !body.len().is_multiple_of(3) {
         return Err(CaptionError::UnexpectedPayload);
     }
 
@@ -158,7 +161,8 @@ fn triplets_from(payload: &[u8]) -> Result<Vec<Triplet>, CaptionError> {
 /// The word is doubled, as broadcast decoders expect for control codes.
 pub fn clear() -> Vec<Triplet> {
     // SAFETY: a pure encoding function over two integers, no pointers involved.
-    let word = unsafe { sys::eia608_control_command(sys::ERASE_DISPLAY_MEMORY, sys::DEFAULT_CHANNEL) };
+    let word =
+        unsafe { sys::eia608_control_command(sys::ERASE_DISPLAY_MEMORY, sys::DEFAULT_CHANNEL) };
     let triplet = [FIELD_1_VALID, (word >> 8) as u8, (word & 0xFF) as u8];
     vec![triplet, triplet]
 }
@@ -193,7 +197,10 @@ mod tests {
         let triplets = encode("Lorem ipsum dolor sit amet").expect("libcaption should encode");
         let offset = display_offset(&triplets).expect("end of caption should be present");
         assert!(offset > 0, "a caption cannot display before it is sent");
-        assert!(offset < triplets.len(), "the display point must be within the run");
+        assert!(
+            offset < triplets.len(),
+            "the display point must be within the run"
+        );
     }
 
     #[test]
@@ -227,10 +234,9 @@ mod tests {
     #[test]
     fn longer_text_takes_longer_to_send() {
         let short = encode("Lorem").expect("encodes");
-        let long = encode(
-            "Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor",
-        )
-        .expect("encodes");
+        let long =
+            encode("Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor")
+                .expect("encodes");
 
         assert!(
             long.len() > short.len(),
@@ -260,6 +266,9 @@ mod tests {
     #[test]
     fn a_payload_without_the_atsc_header_is_refused() {
         let rubbish = vec![0u8; 20];
-        assert_eq!(triplets_from(&rubbish), Err(CaptionError::UnexpectedPayload));
+        assert_eq!(
+            triplets_from(&rubbish),
+            Err(CaptionError::UnexpectedPayload)
+        );
     }
 }

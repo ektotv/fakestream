@@ -2,9 +2,9 @@
 //! itself is confined further, to `media::ffi`.
 
 pub mod ffi;
-pub mod verify;
 pub mod mux;
 pub mod source;
+pub mod verify;
 
 pub use ffi::FfiError;
 

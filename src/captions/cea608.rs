@@ -26,7 +26,11 @@ pub struct Timeline {
 impl Timeline {
     /// The triplet to attach to a given frame.
     pub fn at(&self, frame: usize) -> Triplet {
-        self.frames.get(frame).copied().flatten().unwrap_or(NULL_TRIPLET)
+        self.frames
+            .get(frame)
+            .copied()
+            .flatten()
+            .unwrap_or(NULL_TRIPLET)
     }
 
     pub fn len(&self) -> usize {
@@ -147,7 +151,7 @@ mod tests {
     #[test]
     fn the_caption_lands_on_the_frame_it_was_asked_for() {
         let subject = cue("Lorem ipsum dolor", 4.0);
-        let timeline = schedule(&[subject.clone()], 25, 250).expect("schedules");
+        let timeline = schedule(std::slice::from_ref(&subject), 25, 250).expect("schedules");
 
         let triplets = libcaption::encode(&subject.flattened()).expect("encodes");
         let anchor = libcaption::display_offset(&triplets).expect("has a display point");
@@ -165,7 +169,9 @@ mod tests {
         // pairs of one land in the slots the next needs, and placing forwards
         // pushes every caption after the first two frames late.
         let fps = 25;
-        let cues: Vec<Cue> = (1..=8).map(|index| cue("lorem ipsum dolor", f64::from(index) * 3.0)).collect();
+        let cues: Vec<Cue> = (1..=8)
+            .map(|index| cue("lorem ipsum dolor", f64::from(index) * 3.0))
+            .collect();
 
         let timeline = schedule(&cues, fps, 30 * i64::from(fps)).expect("schedules");
 
@@ -190,11 +196,19 @@ mod tests {
 
         let expected: usize = cues
             .iter()
-            .map(|subject| libcaption::encode(&subject.flattened()).expect("encodes").len())
+            .map(|subject| {
+                libcaption::encode(&subject.flattened())
+                    .expect("encodes")
+                    .len()
+            })
             .sum::<usize>()
             + libcaption::clear().len() * cues.len();
 
-        assert_eq!(timeline.occupied(), expected, "some triplets were lost to a collision");
+        assert_eq!(
+            timeline.occupied(),
+            expected,
+            "some triplets were lost to a collision"
+        );
     }
 
     #[test]

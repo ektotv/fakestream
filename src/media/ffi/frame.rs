@@ -40,7 +40,12 @@ impl PlaneWriter<'_> {
 ///
 /// `width` and `height` are the plane's own dimensions, which for chroma planes
 /// in YUV420P are half those of the frame.
-pub fn plane_writer(frame: &mut AVFrame, plane: usize, width: usize, height: usize) -> Result<PlaneWriter<'_>, FfiError> {
+pub fn plane_writer(
+    frame: &mut AVFrame,
+    plane: usize,
+    width: usize,
+    height: usize,
+) -> Result<PlaneWriter<'_>, FfiError> {
     if plane >= 4 {
         return Err(FfiError::Shape("plane index must be below 4"));
     }
@@ -72,9 +77,15 @@ pub fn plane_writer(frame: &mut AVFrame, plane: usize, width: usize, height: usi
 /// Audio frames only populate `linesize[0]`, which gives the size of a single
 /// plane and applies to every channel. The other linesize entries stay zero, so
 /// the video plane accessor cannot be reused here.
-pub fn audio_plane(frame: &mut AVFrame, channel: usize, bytes: usize) -> Result<&mut [u8], FfiError> {
+pub fn audio_plane(
+    frame: &mut AVFrame,
+    channel: usize,
+    bytes: usize,
+) -> Result<&mut [u8], FfiError> {
     if channel >= 8 {
-        return Err(FfiError::Shape("planar audio beyond 8 channels needs extended_data"));
+        return Err(FfiError::Shape(
+            "planar audio beyond 8 channels needs extended_data",
+        ));
     }
 
     // SAFETY: the frame owns a buffer per channel, each of linesize[0] bytes,
@@ -103,15 +114,18 @@ pub fn attach_captions(frame: &mut AVFrame, cc_data: &[u8]) -> Result<(), FfiErr
     if cc_data.is_empty() {
         return Ok(());
     }
-    if cc_data.len() % 3 != 0 {
+    if !cc_data.len().is_multiple_of(3) {
         return Err(FfiError::Shape("cc_data must be whole three byte triplets"));
     }
 
     // SAFETY: av_frame_new_side_data allocates a buffer the frame then owns and
     // frees with itself. The copy stays within the size just reported.
     unsafe {
-        let side_data =
-            ffi::av_frame_new_side_data(frame.as_mut_ptr(), ffi::AV_FRAME_DATA_A53_CC, cc_data.len());
+        let side_data = ffi::av_frame_new_side_data(
+            frame.as_mut_ptr(),
+            ffi::AV_FRAME_DATA_A53_CC,
+            cc_data.len(),
+        );
         if side_data.is_null() {
             return Err(FfiError::OutOfMemory);
         }

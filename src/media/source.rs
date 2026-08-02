@@ -55,7 +55,7 @@ impl Beeps {
         }
 
         let beep_number = index / self.interval;
-        let frequency = if beep_number % self.accent_every == 0 {
+        let frequency = if beep_number.is_multiple_of(self.accent_every) {
             self.accent_hz
         } else {
             self.normal_hz
@@ -63,7 +63,8 @@ impl Beeps {
 
         // Starting each burst at zero phase keeps the waveform continuous
         // through the fade in.
-        let phase = std::f64::consts::TAU * frequency * position as f64 / f64::from(self.sample_rate);
+        let phase =
+            std::f64::consts::TAU * frequency * position as f64 / f64::from(self.sample_rate);
         (phase.sin() * AMPLITUDE * self.envelope(position)) as f32
     }
 
@@ -96,7 +97,9 @@ impl Beeps {
         samples: usize,
         channels: usize,
     ) -> Result<(), MediaError> {
-        let block: Vec<f32> = (0..samples).map(|offset| self.sample_at(first_sample + offset)).collect();
+        let block: Vec<f32> = (0..samples)
+            .map(|offset| self.sample_at(first_sample + offset))
+            .collect();
         let bytes = samples * size_of::<f32>();
 
         for channel in 0..channels {
@@ -188,7 +191,10 @@ mod tests {
     fn a_beep_starts_on_every_second() {
         let beeps = Beeps::every_second(48_000);
         for second in 0..5 {
-            assert!(beeps.beeping_at(second * 48_000), "second {second} should beep");
+            assert!(
+                beeps.beeping_at(second * 48_000),
+                "second {second} should beep"
+            );
         }
     }
 

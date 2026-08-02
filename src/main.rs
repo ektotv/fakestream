@@ -62,7 +62,9 @@ impl Options {
                 }
                 "--port" => {
                     let value = rest.next().ok_or("--port needs a number")?;
-                    port = value.parse().map_err(|_| format!("{value} is not a port"))?;
+                    port = value
+                        .parse()
+                        .map_err(|_| format!("{value} is not a port"))?;
                 }
                 other => return Err(format!("unknown option {other}\n\n{USAGE}")),
             }

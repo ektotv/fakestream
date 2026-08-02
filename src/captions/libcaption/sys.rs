@@ -7,7 +7,7 @@
 //! Every struct is opaque. Allocation happens in `shim.c`, where the real
 //! headers are in scope, so no size or layout is ever guessed on this side.
 
-use std::os::raw::{c_char, c_double, c_int, c_uchar, c_void};
+use std::os::raw::{c_char, c_double, c_int, c_uchar};
 
 /// Opaque `caption_frame_t`, a 608 screen buffer plus decoder state.
 pub enum CaptionFrame {}
@@ -42,13 +42,7 @@ unsafe extern "C" {
     pub fn sei_message_size(message: *mut SeiMessage) -> usize;
     /// Payload bytes, an ITU T.35 blob for the messages we care about.
     pub fn sei_message_data(message: *mut SeiMessage) -> *mut c_uchar;
-
-    /// Only used to prove linkage in a test.
-    pub fn caption_frame_init(frame: *mut CaptionFrame);
 }
-
-/// Unused import guard. `c_void` is kept for future declarations that need it.
-const _: Option<*mut c_void> = None;
 
 /// Control codes from `eia608_control_t`, only the ones fakestream issues.
 pub const ERASE_DISPLAY_MEMORY: c_int = 0x142C;

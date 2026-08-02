@@ -29,7 +29,9 @@ pub fn bitmap_subtitle(
 ) -> Result<AVSubtitle, FfiError> {
     let expected = (width as usize) * (height as usize);
     if pixels.len() != expected {
-        return Err(FfiError::Shape("pixel count does not match width times height"));
+        return Err(FfiError::Shape(
+            "pixel count does not match width times height",
+        ));
     }
     if palette.len() > 256 {
         return Err(FfiError::Shape("palette holds at most 256 colours"));
@@ -48,7 +50,8 @@ pub fn bitmap_subtitle(
 
         let pixel_data = ffi::av_malloc(pixels.len()) as *mut u8;
         let palette_data = ffi::av_mallocz(ffi::AVPALETTE_SIZE as usize) as *mut u8;
-        let rect_list = ffi::av_malloc(size_of::<*mut ffi::AVSubtitleRect>()) as *mut *mut ffi::AVSubtitleRect;
+        let rect_list =
+            ffi::av_malloc(size_of::<*mut ffi::AVSubtitleRect>()) as *mut *mut ffi::AVSubtitleRect;
 
         if pixel_data.is_null() || palette_data.is_null() || rect_list.is_null() {
             ffi::av_free(pixel_data as *mut _);

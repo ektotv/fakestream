@@ -71,7 +71,11 @@ mod tests {
         let fixtures = catalogue();
         let html = render(&fixtures, "http://localhost:8080");
         for fixture in &fixtures {
-            assert!(html.contains(fixture.route), "{} missing from index", fixture.id);
+            assert!(
+                html.contains(fixture.route),
+                "{} missing from index",
+                fixture.id
+            );
             assert!(html.contains(fixture.title), "{} title missing", fixture.id);
         }
     }

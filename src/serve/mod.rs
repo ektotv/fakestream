@@ -14,14 +14,19 @@ use tower_http::services::ServeDir;
 
 #[derive(Debug)]
 pub enum ServeError {
-    Bind { address: SocketAddr, source: std::io::Error },
+    Bind {
+        address: SocketAddr,
+        source: std::io::Error,
+    },
     Io(std::io::Error),
 }
 
 impl std::fmt::Display for ServeError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Bind { address, source } => write!(formatter, "could not bind {address}: {source}"),
+            Self::Bind { address, source } => {
+                write!(formatter, "could not bind {address}: {source}")
+            }
             Self::Io(source) => write!(formatter, "{source}"),
         }
     }

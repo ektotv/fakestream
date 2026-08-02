@@ -44,7 +44,7 @@ pub fn inspect(path: &CStr) -> Result<Vec<StreamSummary>, MediaError> {
 
     let summaries = input
         .streams()
-        .into_iter()
+        .iter()
         .map(|stream| {
             let parameters = stream.codecpar();
             let time_base = stream.time_base;

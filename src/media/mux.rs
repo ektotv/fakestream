@@ -43,11 +43,17 @@ impl ClipSpec {
     }
 
     fn video_time_base(&self) -> sys::AVRational {
-        sys::AVRational { num: 1, den: self.fps }
+        sys::AVRational {
+            num: 1,
+            den: self.fps,
+        }
     }
 
     fn audio_time_base(&self) -> sys::AVRational {
-        sys::AVRational { num: 1, den: self.sample_rate }
+        sys::AVRational {
+            num: 1,
+            den: self.sample_rate,
+        }
     }
 }
 
@@ -108,13 +114,20 @@ pub fn write_clip(path: &CStr, spec: &ClipSpec) -> Result<(), MediaError> {
             )?;
             sound.set_pts(samples_written);
             context("encoding audio", audio.send_frame(Some(&sound)))?;
-            drain(&mut audio, &mut output, 1, spec.audio_time_base(), audio_stream_tb)?;
+            drain(
+                &mut audio,
+                &mut output,
+                1,
+                spec.audio_time_base(),
+                audio_stream_tb,
+            )?;
             samples_written += i64::from(samples_per_frame);
         }
 
         // The marker shows on the frames a beep is sounding, which makes audio
         // and video sync checkable by eye and ear at the same moment.
-        let frame_first_sample = (index * i64::from(spec.sample_rate) / i64::from(spec.fps)) as usize;
+        let frame_first_sample =
+            (index * i64::from(spec.sample_rate) / i64::from(spec.fps)) as usize;
         paint_pattern(
             &mut picture,
             spec.width as usize,
@@ -133,13 +146,31 @@ pub fn write_clip(path: &CStr, spec: &ClipSpec) -> Result<(), MediaError> {
         }
 
         context("encoding video", video.send_frame(Some(&picture)))?;
-        drain(&mut video, &mut output, 0, spec.video_time_base(), video_stream_tb)?;
+        drain(
+            &mut video,
+            &mut output,
+            0,
+            spec.video_time_base(),
+            video_stream_tb,
+        )?;
     }
 
     context("flushing video", video.send_frame(None))?;
-    drain(&mut video, &mut output, 0, spec.video_time_base(), video_stream_tb)?;
+    drain(
+        &mut video,
+        &mut output,
+        0,
+        spec.video_time_base(),
+        video_stream_tb,
+    )?;
     context("flushing audio", audio.send_frame(None))?;
-    drain(&mut audio, &mut output, 1, spec.audio_time_base(), audio_stream_tb)?;
+    drain(
+        &mut audio,
+        &mut output,
+        1,
+        spec.audio_time_base(),
+        audio_stream_tb,
+    )?;
 
     context("writing trailer", output.write_trailer())?;
     Ok(())
@@ -156,19 +187,26 @@ fn drain(
     while let Ok(mut packet) = encoder.receive_packet() {
         ffi::route(&mut packet, stream_index);
         ffi::rescale(&mut packet, encoder_tb, stream_tb);
-        context("writing packet", output.interleaved_write_frame(&mut packet))?;
+        context(
+            "writing packet",
+            output.interleaved_write_frame(&mut packet),
+        )?;
     }
     Ok(())
 }
 
 fn open_video_encoder(spec: &ClipSpec, global_header: bool) -> Result<AVCodecContext, MediaError> {
-    let codec = AVCodec::find_encoder_by_name(c"libx264").ok_or(MediaError::MissingCodec("libx264"))?;
+    let codec =
+        AVCodec::find_encoder_by_name(c"libx264").ok_or(MediaError::MissingCodec("libx264"))?;
     let mut encoder = AVCodecContext::new(&codec);
     encoder.set_width(spec.width);
     encoder.set_height(spec.height);
     encoder.set_pix_fmt(sys::AV_PIX_FMT_YUV420P);
     encoder.set_time_base(spec.video_time_base());
-    encoder.set_framerate(sys::AVRational { num: spec.fps, den: 1 });
+    encoder.set_framerate(sys::AVRational {
+        num: spec.fps,
+        den: 1,
+    });
     encoder.set_bit_rate(spec.video_bitrate);
     encoder.set_gop_size(spec.fps);
     if global_header {
