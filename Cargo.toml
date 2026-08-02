@@ -19,6 +19,7 @@ axum = "0.8.9"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net"] }
 tower-http = { version = "0.7.0", features = ["fs"] }
 futures-core = "0.3.33"
+tower = "0.5.3"
 
 [profile.release]
 lto = true

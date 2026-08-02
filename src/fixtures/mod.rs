@@ -494,6 +494,45 @@ fn build_hls(
     })
 }
 
+/// Is there work to do for this fixture, or is a current one already on disk?
+pub fn needs_building(fixture: &Fixture, root: &Path) -> bool {
+    !cache::is_current(&fixture.cache_path(root), &cache::signature(&fixture.spec))
+}
+
+/// Build one fixture, reporting as it goes.
+///
+/// Used by the server when a request arrives for something not yet on disk.
+/// Reports the same way a full build does, so the terminal output looks the
+/// same either way.
+pub fn build_one(
+    fixture: &Fixture,
+    root: &Path,
+    mut watcher: impl FnMut(Report<'_>),
+) -> Result<(), BuildError> {
+    // Nothing is drawn for a fixture already on disk, or every cached request
+    // flashes an empty progress bar for no reason.
+    if !needs_building(fixture, root) {
+        watcher(Report::Finished {
+            fixture,
+            built: false,
+        });
+        return Ok(());
+    }
+
+    watcher(Report::Started {
+        fixture,
+        index: 0,
+        total: 0,
+    });
+
+    let built = build_reporting(fixture, root, &mut |fraction| {
+        watcher(Report::Progress { fixture, fraction });
+    })?;
+
+    watcher(Report::Finished { fixture, built });
+    Ok(())
+}
+
 /// Build everything in the catalogue, reporting as it goes.
 ///
 /// Sweeps away anything an interrupted run left behind first. Those files are

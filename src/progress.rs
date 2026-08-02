@@ -44,7 +44,14 @@ impl Bar {
                 total,
             } => {
                 if !self.quiet {
-                    self.draw(fixture.route, 0.0, index + 1, total);
+                    // A total of zero means a single fixture built on its own,
+                    // where a counter would be noise.
+                    self.position = if total == 0 {
+                        None
+                    } else {
+                        Some((index + 1, total))
+                    };
+                    self.redraw(fixture.route, 0.0);
                 }
             }
 
@@ -60,11 +67,6 @@ impl Bar {
                 println!("{state:>9}  {}", fixture.route);
             }
         }
-    }
-
-    fn draw(&mut self, route: &str, fraction: f64, index: usize, total: usize) {
-        self.position = Some((index, total));
-        self.redraw(route, fraction);
     }
 
     fn redraw(&mut self, route: &str, fraction: f64) {

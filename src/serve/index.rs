@@ -28,7 +28,7 @@ pub fn render(fixtures: &[Fixture], base: &str, readiness: &HashMap<String, Read
                 .unwrap_or(Readiness::Waiting);
 
             let link = match state {
-                Readiness::Ready => format!(
+                Readiness::Ready | Readiness::Waiting => format!(
                     r#"<p><a href="/{route}"><code>{base}/{route}</code></a></p>"#,
                     route = escape(fixture.route),
                     base = escape(base),
@@ -37,7 +37,6 @@ pub fn render(fixtures: &[Fixture], base: &str, readiness: &HashMap<String, Read
                     r#"<p class="pending">generating, {percent}%</p>"#,
                     percent = (fraction * 100.0).round() as u32
                 ),
-                Readiness::Waiting => r#"<p class="pending">queued</p>"#.to_string(),
             };
 
             format!(
@@ -108,16 +107,15 @@ mod tests {
     }
 
     #[test]
-    fn an_unbuilt_fixture_offers_no_link() {
-        // Linking to a file that is not there yet sends a player to a 404 and
-        // makes the tool look broken rather than busy.
+    fn an_ungenerated_fixture_is_still_linked() {
+        // Fixtures are generated when first requested, so every route works
+        // whether or not the file exists yet. The first click is just slow.
         let fixtures = catalogue();
         let html = render(&fixtures, "http://localhost:8080", &HashMap::new());
 
-        assert!(html.contains("queued"));
         assert!(
-            !html.contains(&format!("http://localhost:8080/{}", fixtures[0].route)),
-            "a queued fixture was linked"
+            html.contains(&format!("http://localhost:8080/{}", fixtures[0].route)),
+            "a fixture that generates on demand should still be linked"
         );
     }
 

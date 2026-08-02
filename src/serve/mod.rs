@@ -2,17 +2,21 @@
 //! be pointed at a single host and switched between formats without restarting
 //! anything.
 
+mod demand;
 mod index;
 mod live;
 
 use crate::fixtures::{Delivery, Fixture, catalogue};
 use axum::Router;
-use axum::response::Html;
+use axum::extract::{Request, State};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
+use demand::Demand;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use tower::ServiceExt;
 use tower_http::services::ServeDir;
 
 #[derive(Debug)]
@@ -40,6 +44,7 @@ impl std::error::Error for ServeError {}
 /// How far along a fixture is, as the index page reports it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Readiness {
+    /// Not on disk yet. Still linked, since asking for it is what builds it.
     Waiting,
     /// Zero to one.
     Building(f64),
@@ -82,9 +87,13 @@ pub async fn run(
     address: SocketAddr,
     root: PathBuf,
     progress: Progress,
+    quiet: bool,
 ) -> Result<(), ServeError> {
     let fixtures = catalogue();
     let base = format!("http://{address}");
+    let demand = Demand::new(root.clone(), quiet);
+
+    let progress_for_handler = Arc::clone(&progress);
 
     let mut app = Router::new().route(
         "/",
@@ -107,7 +116,13 @@ pub async fn run(
         );
     }
 
-    let app = app.fallback_service(ServeDir::new(root));
+    // Everything else falls through here, which is where a fixture is
+    // generated if this is the first time anyone has asked for it.
+    let app = app.fallback(axum::routing::any(on_demand).with_state(Fixtures {
+        demand,
+        progress: progress_for_handler,
+        root,
+    }));
 
     axum::serve(listener, app).await.map_err(ServeError::Io)
 }
@@ -122,6 +137,69 @@ pub async fn bind(address: SocketAddr) -> Result<tokio::net::TcpListener, ServeE
     tokio::net::TcpListener::bind(address)
         .await
         .map_err(|source| ServeError::Bind { address, source })
+}
+
+/// Shared with the fallback handler.
+#[derive(Clone)]
+struct Fixtures {
+    demand: Arc<Demand>,
+    progress: Progress,
+    root: PathBuf,
+}
+
+/// Serve a file, generating it first if this is the first request for it.
+///
+/// The request blocks while generation runs, which for a fresh fixture is tens
+/// of seconds. That is the trade: slow once, instant afterwards, and nothing is
+/// built that nobody asked for.
+async fn on_demand(State(state): State<Fixtures>, request: Request) -> Response {
+    let path = request.uri().path().trim_start_matches('/').to_string();
+
+    if let Some(fixture) = catalogue()
+        .into_iter()
+        .find(|fixture| fixture.route == path && fixture.delivery.is_generated_ahead())
+    {
+        state.demand.log_request(&path);
+
+        if let Err(error) = state.demand.ensure_built(&fixture, &state.progress).await {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("could not generate {path}: {error}\n"),
+            )
+                .into_response();
+        }
+    }
+
+    // Segments and playlists inside an HLS directory land here too, and by the
+    // time a player asks for one its fixture has already been generated.
+    match ServeDir::new(&state.root).oneshot(request).await {
+        Ok(response) => response.into_response(),
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{error}\n"),
+        )
+            .into_response(),
+    }
+}
+
+/// Mirror a generation report into the state the index page reads.
+pub(crate) fn record_progress(progress: &Progress, report: &crate::fixtures::Report<'_>) {
+    let Ok(mut state) = progress.lock() else {
+        return;
+    };
+
+    match report {
+        crate::fixtures::Report::Started { fixture, .. } => {
+            state.insert(fixture.id.to_string(), Readiness::Building(0.0));
+        }
+        crate::fixtures::Report::Progress { fixture, fraction } => {
+            state.insert(fixture.id.to_string(), Readiness::Building(*fraction));
+        }
+        crate::fixtures::Report::Finished { fixture, .. } => {
+            state.insert(fixture.id.to_string(), Readiness::Ready);
+        }
+        crate::fixtures::Report::SweptPartials(_) => {}
+    }
 }
 
 async fn index_page(fixtures: Vec<Fixture>, base: String, progress: Progress) -> Html<String> {

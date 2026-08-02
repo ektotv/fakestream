@@ -234,6 +234,7 @@ dependencies = [
  "futures-core",
  "rsmpeg",
  "tokio",
+ "tower",
  "tower-http",
 ]
 

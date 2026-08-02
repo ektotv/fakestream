@@ -5,7 +5,6 @@ use fakestream::progress::Bar;
 use fakestream::{fixtures, serve};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 const USAGE: &str = "\
 fakestream generates synthetic test video for people building AV players.
@@ -110,46 +109,16 @@ fn serve(options: Options) {
     };
     println!("serving on http://{address}");
 
-    let worker_progress = Arc::clone(&progress);
-    let dir = options.dir.clone();
-    let quiet = options.quiet;
-    std::thread::spawn(move || {
-        let mut bar = Bar::new(quiet);
-        let result = fixtures::build_all(&dir, &mut |report| {
-            record(&worker_progress, &report);
-            bar.handle(report);
-        });
-        if let Err(error) = result {
-            bar.interrupt();
-            eprintln!("generation stopped: {error}");
-        }
-    });
+    println!("fixtures are generated when first requested, then cached");
 
-    if let Err(error) = runtime.block_on(serve::run(listener, address, options.dir, progress)) {
+    if let Err(error) = runtime.block_on(serve::run(
+        listener,
+        address,
+        options.dir,
+        progress,
+        options.quiet,
+    )) {
         fail(&error.to_string());
-    }
-}
-
-/// Mirror a generation report into the state the index page reads.
-fn record(progress: &serve::Progress, report: &fixtures::Report<'_>) {
-    let Ok(mut state) = progress.lock() else {
-        return;
-    };
-
-    match report {
-        fixtures::Report::Started { fixture, .. } => {
-            state.insert(fixture.id.to_string(), serve::Readiness::Building(0.0));
-        }
-        fixtures::Report::Progress { fixture, fraction } => {
-            state.insert(
-                fixture.id.to_string(),
-                serve::Readiness::Building(*fraction),
-            );
-        }
-        fixtures::Report::Finished { fixture, .. } => {
-            state.insert(fixture.id.to_string(), serve::Readiness::Ready);
-        }
-        fixtures::Report::SweptPartials(_) => {}
     }
 }
 
