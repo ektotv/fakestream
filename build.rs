@@ -77,16 +77,18 @@ fn link_windows_dependencies() {
 
     // x264 sits beside the ffmpeg libraries, wherever those were pointed at.
     if let Some(libs) = env::var_os("FFMPEG_LIBS_DIR") {
-        println!("cargo:rustc-link-search=native={}", Path::new(&libs).display());
+        println!(
+            "cargo:rustc-link-search=native={}",
+            Path::new(&libs).display()
+        );
     }
     println!("cargo:rustc-link-lib=static=libx264");
 
     // Taken from ffmpeg's own configure, which is the only list that stays
     // correct as it grows dependencies.
     for library in [
-        "advapi32", "bcrypt", "gdi32", "mfplat", "mfuuid", "ole32", "oleaut32",
-        "psapi", "secur32", "shlwapi", "strmiids", "user32", "uuid", "vfw32",
-        "ws2_32",
+        "advapi32", "bcrypt", "gdi32", "mfplat", "mfuuid", "ole32", "oleaut32", "psapi", "secur32",
+        "shlwapi", "strmiids", "user32", "uuid", "vfw32", "ws2_32",
     ] {
         println!("cargo:rustc-link-lib={library}");
     }
