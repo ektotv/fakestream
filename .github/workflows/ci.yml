@@ -13,7 +13,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      # Actions are pinned to a commit rather than a tag, since a tag can be
+      # moved to point at different code. The version alongside is what that
+      # commit was released as.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install build tools
         # nasm is for x264's assembly, and pkg-config is how the ffmpeg build
@@ -22,15 +25,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y nasm pkg-config
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
+          # Named explicitly because this action normally reads the toolchain
+          # from the ref it was called by, which a commit pin does not carry.
+          toolchain: stable
           components: clippy, rustfmt
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Cache the static ffmpeg
         id: ffmpeg-cache
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: third_party/ffmpeg
           # Keyed on the script, so changing a configure flag rebuilds and
@@ -78,7 +84,7 @@ jobs:
           curl --fail --max-time 300 -o /tmp/basic.mp4 http://localhost:8080/vod/basic.mp4
           test -s /tmp/basic.mp4
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: fakestream-linux-x86_64
           path: target/release/fakestream
