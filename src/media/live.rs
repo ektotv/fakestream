@@ -12,6 +12,8 @@
 
 use super::mux::ClipSpec;
 use super::{MediaError, clock, context, ffi, overlay, source::Beeps, source::paint_pattern};
+use crate::captions::libcaption::Channel;
+use crate::captions::rolling::RollingCaptions;
 use rsmpeg::avcodec::{AVCodec, AVCodecContext};
 use rsmpeg::avformat::AVIOContextContainer;
 use rsmpeg::avformat::{AVFormatContextOutput, AVIOContextCustom};
@@ -28,6 +30,7 @@ pub struct LiveStream {
     picture: AVFrame,
     sound: AVFrame,
     beeps: Beeps,
+    captions: RollingCaptions,
     muxer: TsMuxer,
 
     /// Seconds since the epoch when this stream began, which the clock counts
@@ -68,6 +71,12 @@ impl LiveStream {
         context("allocating a live audio frame", sound.alloc_buffer())?;
 
         let beeps = Beeps::every_second(spec.sample_rate as u32);
+        let captions = RollingCaptions::new(
+            spec.fps,
+            CAPTION_INTERVAL_SECONDS,
+            CAPTION_VISIBLE_SECONDS,
+            Channel::One,
+        );
 
         Ok(Self {
             spec,
@@ -76,6 +85,7 @@ impl LiveStream {
             picture,
             sound,
             beeps,
+            captions,
             muxer,
             unix_start,
             started: Instant::now(),
@@ -148,6 +158,18 @@ impl LiveStream {
             self.spec.width as usize,
             self.spec.height as usize,
         )?;
+
+        // Captions ride in the video's own SEI, so a live stream needs no extra
+        // track for them, which is how live IPTV carries captions too.
+        ffi::clear_captions(&mut self.picture);
+        let triplet = self
+            .captions
+            .triplet_for(self.frame, self.unix_start)
+            .map_err(|error| MediaError::Ffmpeg {
+                doing: "encoding a live caption",
+                detail: error.to_string(),
+            })?;
+        ffi::attach_captions(&mut self.picture, &triplet)?;
 
         self.picture.set_pts(self.frame as i64);
         context(
@@ -313,6 +335,12 @@ impl TsMuxer {
         }
     }
 }
+
+/// Seconds between captions appearing on a live stream.
+const CAPTION_INTERVAL_SECONDS: f64 = 3.0;
+
+/// How long each caption stays up, leaving a visible gap before the next.
+const CAPTION_VISIBLE_SECONDS: f64 = 2.5;
 
 /// The muxer's own scratch buffer. Small enough that packets reach a viewer
 /// promptly rather than sitting in ffmpeg waiting for the buffer to fill.

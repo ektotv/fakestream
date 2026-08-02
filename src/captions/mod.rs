@@ -8,5 +8,6 @@ pub mod ass;
 pub mod cea608;
 pub mod dvb;
 pub mod libcaption;
+pub mod rolling;
 pub mod script;
 pub mod text;
