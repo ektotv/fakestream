@@ -1,5 +1,6 @@
 //! Writing a clip. Encoders in, container out.
 
+use super::hls::HlsOptions;
 use super::subtitles::SubtitleTrack;
 use super::{MediaError, context, ffi, source::Beeps, source::paint_pattern};
 use crate::captions::ass;
@@ -79,7 +80,61 @@ impl ClipSpec {
 /// Generate a clip and write it to `path`. The container is inferred from the
 /// file extension, which is how libavformat picks a muxer.
 pub fn write_clip(path: &CStr, spec: &ClipSpec) -> Result<(), MediaError> {
-    write_clip_reporting(path, spec, &mut |_| {})
+    write_clip_reporting(&Target::File(path), spec, &mut |_| {})
+}
+
+/// Where a clip is written.
+pub enum Target<'a> {
+    /// One file, with the muxer chosen from its extension.
+    File(&'a CStr),
+    /// HLS, writing playlists and segments into a directory. The path names the
+    /// variant playlist, and everything else lands beside it.
+    Hls {
+        playlist: &'a CStr,
+        options: &'a HlsOptions,
+    },
+}
+
+/// Open the container a clip will be written into, along with any settings the
+/// muxer wants when the header is written.
+///
+/// Muxer private options, which is what all the HLS ones are, are consumed by
+/// `write_header` rather than at allocation. Passing them earlier leaves them
+/// untouched and the muxer runs on its defaults.
+fn open_output(
+    target: &Target,
+    spec: &ClipSpec,
+) -> Result<(AVFormatContextOutput, Option<AVDictionary>), MediaError> {
+    match target {
+        Target::File(path) => {
+            let output = context("creating output", AVFormatContextOutput::create(path))?;
+            Ok((output, None))
+        }
+        Target::Hls { playlist, options } => {
+            let mut settings: Option<AVDictionary> = None;
+            for (key, value) in options.as_pairs(&spec.subtitles) {
+                let key = CString::new(key)
+                    .map_err(|_| MediaError::Ffi(ffi::FfiError::Shape("bad option name")))?;
+                let value = CString::new(value)
+                    .map_err(|_| MediaError::Ffi(ffi::FfiError::Shape("bad option value")))?;
+
+                settings = Some(match settings {
+                    Some(existing) => existing.set(&key, &value, 0),
+                    None => AVDictionary::new(&key, &value, 0),
+                });
+            }
+
+            let output = context(
+                "creating hls output",
+                AVFormatContextOutput::builder()
+                    .format_name(c"hls")
+                    .filename(playlist)
+                    .build(),
+            )?;
+
+            Ok((output, settings))
+        }
+    }
 }
 
 /// As [`write_clip`], reporting how far through it is.
@@ -88,11 +143,11 @@ pub fn write_clip(path: &CStr, spec: &ClipSpec) -> Result<(), MediaError> {
 /// indistinguishable from being stuck. The fraction runs from zero to one and
 /// is reported at most once per percent, so a caller can redraw cheaply.
 pub fn write_clip_reporting(
-    path: &CStr,
+    target: &Target,
     spec: &ClipSpec,
     progress: &mut dyn FnMut(f64),
 ) -> Result<(), MediaError> {
-    let mut output = context("creating output", AVFormatContextOutput::create(path))?;
+    let (mut output, mut settings) = open_output(target, spec)?;
 
     // MP4 and other formats keep codec configuration in the container header
     // rather than in the stream, and the encoder has to know that before it is
@@ -123,7 +178,17 @@ pub fn write_clip_reporting(
         subtitle_encoders.push(encoder);
     }
 
-    context("writing header", output.write_header(&mut None))?;
+    context("writing header", output.write_header(&mut settings))?;
+
+    // Options the muxer did not recognise are left behind rather than
+    // reported, so an unknown or misspelled one would silently do nothing and
+    // the fixture would look right while being wrong.
+    if settings.is_some() {
+        return Err(MediaError::Ffmpeg {
+            doing: "configuring the muxer",
+            detail: "one or more options were not recognised".to_string(),
+        });
+    }
 
     // write_header is free to replace the time bases just set, and MPEG-TS
     // always does, forcing 90kHz. Read back what the muxer settled on.

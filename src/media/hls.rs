@@ -1,0 +1,214 @@
+//! HLS packaging.
+//!
+//! libavformat's HLS muxer does the segmenting and playlist writing, and every
+//! knob it has is an option on the muxer rather than something the ffmpeg
+//! command line adds on top. So this is configuration rather than
+//! reimplementation.
+//!
+//! Subtitles in HLS are always separate WebVTT renditions, whichever segment
+//! format the media uses. There is no such thing as a subtitle baked into an
+//! fMP4 segment here.
+
+use crate::media::subtitles::SubtitleTrack;
+
+/// What the media segments are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SegmentType {
+    /// MPEG-TS segments, which is what older services serve and what a player
+    /// is most likely to have been tested against.
+    MpegTs,
+    /// Fragmented MP4, used by newer services and required for some codecs.
+    /// Adds an init segment and lifts the playlist to version 7.
+    FragmentedMp4,
+}
+
+impl SegmentType {
+    /// The muxer's own numbering for `hls_segment_type`.
+    fn option_value(self) -> &'static std::ffi::CStr {
+        match self {
+            Self::MpegTs => c"mpegts",
+            Self::FragmentedMp4 => c"fmp4",
+        }
+    }
+
+    /// What a segment file is called.
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::MpegTs => "ts",
+            Self::FragmentedMp4 => "m4s",
+        }
+    }
+}
+
+/// Whether the playlist is complete or still growing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaylistKind {
+    /// A finished recording. The playlist carries every segment and is marked
+    /// complete, so a player knows it can seek anywhere.
+    Vod,
+    /// A live window. Old segments fall off the front as new ones arrive.
+    Live { window_segments: usize },
+}
+
+/// How to package a clip as HLS.
+#[derive(Debug, Clone)]
+pub struct HlsOptions {
+    pub segment_type: SegmentType,
+    pub segment_seconds: f64,
+    pub kind: PlaylistKind,
+    /// Filename of the master playlist, written beside the variant playlists.
+    pub master_name: String,
+}
+
+impl Default for HlsOptions {
+    fn default() -> Self {
+        Self {
+            segment_type: SegmentType::MpegTs,
+            segment_seconds: 4.0,
+            kind: PlaylistKind::Vod,
+            master_name: "master.m3u8".to_string(),
+        }
+    }
+}
+
+impl HlsOptions {
+    /// Describe which streams belong to which variant.
+    ///
+    /// Subtitles go into a named group so the master playlist advertises them
+    /// as selectable renditions rather than burying them in the variant.
+    pub fn variant_map(&self, subtitles: &[SubtitleTrack]) -> String {
+        let mut parts = vec!["v:0".to_string(), "a:0".to_string()];
+
+        for index in 0..subtitles.len() {
+            parts.push(format!("s:{index}"));
+        }
+
+        if !subtitles.is_empty() {
+            parts.push("sgroup:subs".to_string());
+        }
+
+        parts.join(",")
+    }
+
+    /// The options the muxer is opened with.
+    ///
+    /// Returned as pairs rather than a dictionary so this stays testable
+    /// without touching ffmpeg.
+    pub fn as_pairs(&self, subtitles: &[SubtitleTrack]) -> Vec<(String, String)> {
+        let mut pairs = vec![
+            (
+                "hls_segment_type".to_string(),
+                self.segment_type
+                    .option_value()
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            ("hls_time".to_string(), format!("{}", self.segment_seconds)),
+            ("master_pl_name".to_string(), self.master_name.clone()),
+            ("var_stream_map".to_string(), self.variant_map(subtitles)),
+        ];
+
+        match self.kind {
+            PlaylistKind::Vod => {
+                // Every segment listed and the playlist marked complete, so a
+                // player knows the whole thing is seekable.
+                pairs.push(("hls_list_size".to_string(), "0".to_string()));
+                pairs.push(("hls_playlist_type".to_string(), "vod".to_string()));
+            }
+            PlaylistKind::Live { window_segments } => {
+                pairs.push(("hls_list_size".to_string(), window_segments.to_string()));
+                // Segments that have fallen out of the window are deleted, or a
+                // stream left running fills the disk.
+                pairs.push(("hls_flags".to_string(), "delete_segments".to_string()));
+            }
+        }
+
+        pairs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::captions::script::lorem_cues;
+    use crate::media::subtitles::SubtitleFormat;
+
+    fn tracks(count: usize) -> Vec<SubtitleTrack> {
+        (0..count)
+            .map(|index| {
+                SubtitleTrack::new(
+                    SubtitleFormat::WebVtt,
+                    "eng",
+                    &format!("Track {index}"),
+                    lorem_cues(12.0, 3.0, 2.0),
+                )
+            })
+            .collect()
+    }
+
+    fn value<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        pairs
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.as_str())
+    }
+
+    #[test]
+    fn a_clip_without_subtitles_declares_no_group() {
+        let options = HlsOptions::default();
+        assert_eq!(options.variant_map(&[]), "v:0,a:0");
+    }
+
+    #[test]
+    fn subtitle_tracks_join_a_named_group() {
+        let options = HlsOptions::default();
+        assert_eq!(
+            options.variant_map(&tracks(3)),
+            "v:0,a:0,s:0,s:1,s:2,sgroup:subs"
+        );
+    }
+
+    #[test]
+    fn vod_lists_every_segment_and_marks_itself_complete() {
+        let pairs = HlsOptions::default().as_pairs(&[]);
+        assert_eq!(value(&pairs, "hls_list_size"), Some("0"));
+        assert_eq!(value(&pairs, "hls_playlist_type"), Some("vod"));
+    }
+
+    #[test]
+    fn live_keeps_a_window_and_deletes_what_falls_out_of_it() {
+        // Without the delete flag a stream left running fills the disk.
+        let options = HlsOptions {
+            kind: PlaylistKind::Live { window_segments: 6 },
+            ..HlsOptions::default()
+        };
+        let pairs = options.as_pairs(&[]);
+
+        assert_eq!(value(&pairs, "hls_list_size"), Some("6"));
+        assert_eq!(value(&pairs, "hls_flags"), Some("delete_segments"));
+        assert_eq!(
+            value(&pairs, "hls_playlist_type"),
+            None,
+            "a live playlist is not vod"
+        );
+    }
+
+    #[test]
+    fn the_segment_type_reaches_the_muxer() {
+        let ts = HlsOptions::default().as_pairs(&[]);
+        assert_eq!(value(&ts, "hls_segment_type"), Some("mpegts"));
+
+        let fmp4 = HlsOptions {
+            segment_type: SegmentType::FragmentedMp4,
+            ..HlsOptions::default()
+        }
+        .as_pairs(&[]);
+        assert_eq!(value(&fmp4, "hls_segment_type"), Some("fmp4"));
+    }
+
+    #[test]
+    fn segment_files_are_named_for_their_type() {
+        assert_eq!(SegmentType::MpegTs.extension(), "ts");
+        assert_eq!(SegmentType::FragmentedMp4.extension(), "m4s");
+    }
+}

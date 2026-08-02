@@ -8,7 +8,8 @@ use crate::captions::cea608::ChannelCues;
 use crate::captions::libcaption::Channel;
 use crate::captions::script::{lorem_cues, offset_cues};
 use crate::media::MediaError;
-use crate::media::mux::{ClipSpec, write_clip_reporting};
+use crate::media::hls::{HlsOptions, PlaylistKind, SegmentType};
+use crate::media::mux::{ClipSpec, Target, write_clip_reporting};
 use crate::media::subtitles::{SubtitleFormat, SubtitleTrack};
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
@@ -49,6 +50,8 @@ pub struct Fixture {
     pub route: &'static str,
     pub delivery: Delivery,
     pub spec: ClipSpec,
+    /// Set when the fixture is packaged as HLS rather than a single file.
+    pub hls: Option<HlsOptions>,
 }
 
 impl Fixture {
@@ -74,6 +77,7 @@ pub fn catalogue() -> Vec<Fixture> {
                 duration_seconds: 30.0,
                 ..ClipSpec::default()
             },
+            hls: None,
         },
         Fixture {
             id: "live-ts",
@@ -90,6 +94,7 @@ pub fn catalogue() -> Vec<Fixture> {
                 duration_seconds: 0.0,
                 ..ClipSpec::default()
             },
+            hls: None,
         },
         Fixture {
             id: "vod-ts-cea608",
@@ -108,6 +113,7 @@ pub fn catalogue() -> Vec<Fixture> {
                 }],
                 ..ClipSpec::default()
             },
+            hls: None,
         },
         Fixture {
             id: "vod-ts-cea608-dual",
@@ -135,6 +141,7 @@ pub fn catalogue() -> Vec<Fixture> {
                 ],
                 ..ClipSpec::default()
             },
+            hls: None,
         },
         Fixture {
             id: "vod-ts-dvbsub",
@@ -155,6 +162,7 @@ pub fn catalogue() -> Vec<Fixture> {
                 )],
                 ..ClipSpec::default()
             },
+            hls: None,
         },
         Fixture {
             id: "vod-mp4-tx3g",
@@ -174,6 +182,7 @@ pub fn catalogue() -> Vec<Fixture> {
                 )],
                 ..ClipSpec::default()
             },
+            hls: None,
         },
         Fixture {
             id: "vod-mp4-ttml",
@@ -192,6 +201,7 @@ pub fn catalogue() -> Vec<Fixture> {
                 )],
                 ..ClipSpec::default()
             },
+            hls: None,
         },
         Fixture {
             id: "vod-mkv-subrip",
@@ -210,6 +220,7 @@ pub fn catalogue() -> Vec<Fixture> {
                 )],
                 ..ClipSpec::default()
             },
+            hls: None,
         },
         Fixture {
             id: "vod-mkv-ass",
@@ -228,6 +239,7 @@ pub fn catalogue() -> Vec<Fixture> {
                 )],
                 ..ClipSpec::default()
             },
+            hls: None,
         },
         Fixture {
             id: "vod-mkv-webvtt",
@@ -246,6 +258,49 @@ pub fn catalogue() -> Vec<Fixture> {
                 )],
                 ..ClipSpec::default()
             },
+            hls: None,
+        },
+        Fixture {
+            id: "hls-ts",
+            title: "HLS with MPEG-TS segments",
+            purpose: "Segmented delivery with WebVTT subtitle renditions in \
+                      four languages, announced in the master playlist. This is \
+                      what most IPTV services serve, and the subtitles arrive as \
+                      separate renditions rather than inside the media.",
+            route: "hls/ts/master.m3u8",
+            delivery: Delivery::Vod,
+            spec: ClipSpec {
+                duration_seconds: 30.0,
+                subtitles: hls_subtitle_tracks(),
+                ..ClipSpec::default()
+            },
+            hls: Some(HlsOptions {
+                segment_type: SegmentType::MpegTs,
+                segment_seconds: 4.0,
+                kind: PlaylistKind::Vod,
+                master_name: "master.m3u8".to_string(),
+            }),
+        },
+        Fixture {
+            id: "hls-fmp4",
+            title: "HLS with fragmented MP4 segments",
+            purpose: "The same content packaged as fMP4, which newer services \
+                      use and which lifts the playlist to version 7. A player \
+                      takes a different path through its extractor for these, \
+                      so handling TS says nothing about handling these.",
+            route: "hls/fmp4/master.m3u8",
+            delivery: Delivery::Vod,
+            spec: ClipSpec {
+                duration_seconds: 30.0,
+                subtitles: hls_subtitle_tracks(),
+                ..ClipSpec::default()
+            },
+            hls: Some(HlsOptions {
+                segment_type: SegmentType::FragmentedMp4,
+                segment_seconds: 4.0,
+                kind: PlaylistKind::Vod,
+                master_name: "master.m3u8".to_string(),
+            }),
         },
         Fixture {
             id: "vod-mkv-multilingual",
@@ -271,8 +326,29 @@ pub fn catalogue() -> Vec<Fixture> {
                     .collect(),
                 ..ClipSpec::default()
             },
+            hls: None,
         },
     ]
+}
+
+/// HLS carries subtitles as WebVTT renditions whatever the segment format, so
+/// this is WebVTT regardless of what the media segments are.
+///
+/// Only one language, which is a limit of ffmpeg's HLS muxer rather than a
+/// choice. It writes a subtitle rendition only for a variant that also carries
+/// video, and gives each variant exactly one WebVTT stream, so several
+/// languages would mean duplicating the video once per language. Feeding it
+/// more than one subtitle stream in a variant fails outright with "webvtt muxer
+/// does not support more than one stream of type subtitle".
+///
+/// The multilingual Matroska fixture covers language selection meanwhile.
+fn hls_subtitle_tracks() -> Vec<SubtitleTrack> {
+    vec![SubtitleTrack::new(
+        SubtitleFormat::WebVtt,
+        "eng",
+        "English",
+        lorem_cues(30.0, 3.0, 2.5),
+    )]
 }
 
 /// Languages for the multilingual fixture. The prefix goes in front of every
@@ -343,18 +419,13 @@ pub fn build_reporting(
         })?;
     }
 
-    // Write to a neighbouring temporary name first, so an interrupted run
-    // cannot leave a half written file that later looks complete.
-    let partial = cache::partial_name(&target);
-    let c_path = CString::new(partial.to_string_lossy().as_bytes())
-        .map_err(|_| BuildError::UnusablePath(partial.clone()))?;
-
-    write_clip_reporting(&c_path, &fixture.spec, progress)?;
-
-    std::fs::rename(&partial, &target).map_err(|source| BuildError::Io {
-        path: target.clone(),
-        source,
-    })?;
+    // HLS writes a directory of playlists and segments rather than one file,
+    // so it is staged a directory at a time. Renaming only the playlist would
+    // leave every segment named after the temporary.
+    match &fixture.hls {
+        Some(options) => build_hls(fixture, &target, options, progress)?,
+        None => build_file(fixture, &target, progress)?,
+    }
 
     cache::record(&target, &signature).map_err(|source| BuildError::Io {
         path: target.clone(),
@@ -362,6 +433,65 @@ pub fn build_reporting(
     })?;
 
     Ok(true)
+}
+
+/// Generate a single file fixture, staged under a temporary name so an
+/// interrupted run cannot leave a half written file that later looks complete.
+fn build_file(
+    fixture: &Fixture,
+    target: &Path,
+    progress: &mut dyn FnMut(f64),
+) -> Result<(), BuildError> {
+    let partial = cache::partial_name(target);
+    let c_path = CString::new(partial.to_string_lossy().as_bytes())
+        .map_err(|_| BuildError::UnusablePath(partial.clone()))?;
+
+    write_clip_reporting(&Target::File(&c_path), &fixture.spec, progress)?;
+
+    std::fs::rename(&partial, target).map_err(|source| BuildError::Io {
+        path: target.to_path_buf(),
+        source,
+    })
+}
+
+/// Generate an HLS fixture into a staging directory, then move the whole
+/// directory into place so a reader never sees a partial playlist.
+fn build_hls(
+    fixture: &Fixture,
+    target: &Path,
+    options: &HlsOptions,
+    progress: &mut dyn FnMut(f64),
+) -> Result<(), BuildError> {
+    let final_dir = target.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let staging = cache::partial_name(&final_dir);
+
+    // Anything left from a previous attempt would be mixed in with this one.
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).map_err(|source| BuildError::Io {
+        path: staging.clone(),
+        source,
+    })?;
+
+    // The muxer derives segment and rendition names from the variant playlist
+    // path, and writes the master playlist beside it.
+    let variant = staging.join("variant%v.m3u8");
+    let c_path = CString::new(variant.to_string_lossy().as_bytes())
+        .map_err(|_| BuildError::UnusablePath(variant.clone()))?;
+
+    write_clip_reporting(
+        &Target::Hls {
+            playlist: &c_path,
+            options,
+        },
+        &fixture.spec,
+        progress,
+    )?;
+
+    let _ = std::fs::remove_dir_all(&final_dir);
+    std::fs::rename(&staging, &final_dir).map_err(|source| BuildError::Io {
+        path: final_dir,
+        source,
+    })
 }
 
 /// Build everything in the catalogue, reporting as it goes.

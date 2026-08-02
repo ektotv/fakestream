@@ -3,6 +3,7 @@
 
 pub mod clock;
 pub mod ffi;
+pub mod hls;
 pub mod live;
 pub mod mux;
 pub mod overlay;
