@@ -171,6 +171,26 @@ pub fn catalogue() -> Vec<Fixture> {
             hls: None,
         },
         Fixture {
+            id: "vod-ts-cea708",
+            title: "MPEG-TS with CEA-708 captions",
+            purpose: "DTVCC service data alongside the 608 pairs in the same \
+                      SEI, which is how a modern broadcast carries both. A \
+                      player that implements 708 and not 608 finds nothing in \
+                      the other in-band fixtures.",
+            route: "vod/cea708.ts",
+            delivery: Delivery::Vod,
+            spec: ClipSpec {
+                duration_seconds: 30.0,
+                cea608: vec![ChannelCues {
+                    channel: Channel::One,
+                    cues: lorem_cues(30.0, 3.0, 2.5),
+                }],
+                cea708: lorem_cues(30.0, 3.0, 2.5),
+                ..ClipSpec::default()
+            },
+            hls: None,
+        },
+        Fixture {
             id: "vod-ts-dvbsub",
             title: "MPEG-TS with DVB bitmap subtitles",
             purpose: "Subtitles as pictures on their own announced stream, the \

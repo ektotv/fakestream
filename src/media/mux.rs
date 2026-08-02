@@ -5,6 +5,7 @@ use super::subtitles::SubtitleTrack;
 use super::{MediaError, context, ffi, source::Beeps, source::paint_pattern};
 use crate::captions::ass;
 use crate::captions::cea608::{self, ChannelCues};
+use crate::captions::cea708;
 use crate::captions::dvb::{self, Layout};
 use crate::captions::script::Cue;
 use rsmpeg::avcodec::{AVCodec, AVCodecContext};
@@ -35,6 +36,9 @@ pub struct ClipSpec {
     /// Captions carried in the video's SEI, one entry per caption channel.
     /// Empty means none.
     pub cea608: Vec<ChannelCues>,
+    /// CEA-708 captions, which share the same SEI as the 608 ones. Real
+    /// streams commonly carry both.
+    pub cea708: Vec<Cue>,
     /// Subtitle tracks, each its own stream in the container.
     pub subtitles: Vec<SubtitleTrack>,
 }
@@ -51,6 +55,7 @@ impl Default for ClipSpec {
             sample_rate: 48_000,
             channels: 2,
             cea608: Vec::new(),
+            cea708: Vec::new(),
             subtitles: Vec::new(),
         }
     }
@@ -232,6 +237,7 @@ pub fn write_clip_reporting(
         "scheduling captions",
         cea608::schedule(&spec.cea608, spec.fps, total_frames),
     )?;
+    let dtvcc = cea708::schedule(&spec.cea708, spec.fps, total_frames);
 
     let mut last_reported = -1i64;
 
@@ -293,9 +299,18 @@ pub fn write_clip_reporting(
         // Side data does not survive a frame being reused, but clearing is
         // still explicit, since a stale caption riding a later frame would be
         // near impossible to spot in the output.
+        // Both caption systems share one cc_data array, which is how a real
+        // stream carries them, so they are gathered before being attached.
         ffi::clear_captions(&mut picture);
+        let mut cc_data: Vec<u8> = Vec::new();
         if !spec.cea608.is_empty() {
-            ffi::attach_captions(&mut picture, &captions.at(index as usize))?;
+            cc_data.extend_from_slice(&captions.at(index as usize));
+        }
+        for triplet in dtvcc.at(index as usize) {
+            cc_data.extend_from_slice(triplet);
+        }
+        if !cc_data.is_empty() {
+            ffi::attach_captions(&mut picture, &cc_data)?;
         }
 
         context("encoding video", video.send_frame(Some(&picture)))?;
