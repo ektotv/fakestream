@@ -51,10 +51,29 @@ jobs:
           path: third_party/ffmpeg
           key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/build-ffmpeg.sh') }}
 
+      # MSVC is set up in the Windows environment and the build runs inside
+      # MSYS2, so whether the compiler survives that boundary is worth knowing
+      # before anything long starts.
+      - name: Check MSVC is reachable from the shell
+        shell: msys2 {0}
+        run: |
+          echo "PATH has cl at: $(command -v cl || echo 'NOT FOUND')"
+          printf 'int main(void){return 0;}\n' > probe.c
+          cl -nologo probe.c || echo "cl cannot compile here"
+
       - name: Build static ffmpeg
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
         shell: msys2 {0}
         run: ./scripts/build-ffmpeg.sh
+
+      - name: Show why the build failed
+        if: failure()
+        shell: msys2 {0}
+        run: |
+          for log in third_party/ffmpeg/build/x264/config.log \
+                     third_party/ffmpeg/build/ffmpeg-*/ffbuild/config.log; do
+            [ -f "$log" ] && echo "=== $log ===" && tail -40 "$log"
+          done
 
       - name: Check formatting
         run: cargo fmt --check
