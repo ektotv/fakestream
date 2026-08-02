@@ -22,6 +22,9 @@ pub enum Delivery {
     /// An endless stream, generated as it is watched. Nothing is written to
     /// disk and there is nothing to build in advance.
     Live,
+    /// An endless stream segmented onto disk as HLS. One writer serves every
+    /// viewer, since they share a timeline rather than each getting their own.
+    LiveHls,
 }
 
 impl Delivery {
@@ -29,6 +32,7 @@ impl Delivery {
         match self {
             Self::Vod => "VOD",
             Self::Live => "LIVE",
+            Self::LiveHls => "LIVE HLS",
         }
     }
 
@@ -95,6 +99,29 @@ pub fn catalogue() -> Vec<Fixture> {
                 ..ClipSpec::default()
             },
             hls: None,
+        },
+        Fixture {
+            id: "live-hls",
+            title: "Live HLS, a rolling playlist",
+            purpose: "A live window rather than a complete recording. Segments \
+                      appear as they are made and expire off the front, so a \
+                      player has to keep reloading the playlist and cannot seek \
+                      before the window. The picture carries the same clock the \
+                      progressive live stream does.",
+            route: "live/hls/master.m3u8",
+            delivery: Delivery::LiveHls,
+            spec: ClipSpec {
+                duration_seconds: 0.0,
+                ..ClipSpec::default()
+            },
+            hls: Some(HlsOptions {
+                segment_type: SegmentType::MpegTs,
+                // Short segments, since a viewer waits roughly one of them
+                // before anything appears.
+                segment_seconds: 2.0,
+                kind: PlaylistKind::Live { window_segments: 6 },
+                master_name: "master.m3u8".to_string(),
+            }),
         },
         Fixture {
             id: "vod-ts-cea608",
@@ -474,7 +501,7 @@ fn build_hls(
 
     // The muxer derives segment and rendition names from the variant playlist
     // path, and writes the master playlist beside it.
-    let variant = staging.join("variant%v.m3u8");
+    let variant = staging.join(HlsOptions::VARIANT_TEMPLATE);
     let c_path = CString::new(variant.to_string_lossy().as_bytes())
         .map_err(|_| BuildError::UnusablePath(variant.clone()))?;
 

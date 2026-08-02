@@ -12,6 +12,7 @@ use rsmpeg::avformat::AVFormatContextOutput;
 use rsmpeg::avutil::{AVChannelLayout, AVDictionary, AVFrame};
 use rsmpeg::ffi as sys;
 use std::ffi::{CStr, CString};
+use std::path::Path;
 
 /// What to generate. Everything is synthetic, so this is the whole input.
 #[derive(Debug, Clone)]
@@ -21,6 +22,14 @@ pub struct ClipSpec {
     pub fps: i32,
     pub duration_seconds: f64,
     pub video_bitrate: i64,
+    /// How often a keyframe is emitted, in seconds.
+    ///
+    /// For segmented delivery this should match the segment length, so each
+    /// segment is exactly one group of pictures beginning with a keyframe. A
+    /// segment that starts mid-group only decodes because the previous segment
+    /// happened to be fetched, which is what makes players stutter at
+    /// boundaries.
+    pub keyframe_seconds: f64,
     pub sample_rate: i32,
     pub channels: u32,
     /// Captions carried in the video's SEI, one entry per caption channel.
@@ -38,6 +47,7 @@ impl Default for ClipSpec {
             fps: 25,
             duration_seconds: 10.0,
             video_bitrate: 2_000_000,
+            keyframe_seconds: 1.0,
             sample_rate: 48_000,
             channels: 2,
             cea608: Vec::new(),
@@ -51,6 +61,11 @@ impl Default for ClipSpec {
 const SUBTITLE_TIMEBASE: i32 = 1000;
 
 impl ClipSpec {
+    /// Keyframe interval in frames, which is what the encoder wants.
+    pub(crate) fn keyframe_interval(&self) -> i32 {
+        ((self.keyframe_seconds * f64::from(self.fps)).round() as i32).max(1)
+    }
+
     fn total_video_frames(&self) -> i64 {
         (self.duration_seconds * f64::from(self.fps)).round() as i64
     }
@@ -111,8 +126,13 @@ fn open_output(
             Ok((output, None))
         }
         Target::Hls { playlist, options } => {
+            let directory = Path::new(playlist.to_str().unwrap_or("."))
+                .parent()
+                .unwrap_or(Path::new("."))
+                .to_path_buf();
+
             let mut settings: Option<AVDictionary> = None;
-            for (key, value) in options.as_pairs(&spec.subtitles) {
+            for (key, value) in options.as_pairs(&spec.subtitles, &directory) {
                 let key = CString::new(key)
                     .map_err(|_| MediaError::Ffi(ffi::FfiError::Shape("bad option name")))?;
                 let value = CString::new(value)
@@ -342,7 +362,7 @@ fn open_video_encoder(spec: &ClipSpec, global_header: bool) -> Result<AVCodecCon
         den: 1,
     });
     encoder.set_bit_rate(spec.video_bitrate);
-    encoder.set_gop_size(spec.fps);
+    encoder.set_gop_size(spec.keyframe_interval());
     if global_header {
         encoder.set_flags(encoder.flags | sys::AV_CODEC_FLAG_GLOBAL_HEADER as i32);
     }
@@ -527,3 +547,30 @@ fn write_subtitle(
 
 /// Video is stream zero, audio one, so subtitle tracks follow.
 const FIRST_SUBTITLE_STREAM: usize = 2;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_keyframe_interval_is_expressed_in_frames() {
+        let spec = ClipSpec {
+            fps: 25,
+            keyframe_seconds: 2.0,
+            ..ClipSpec::default()
+        };
+        assert_eq!(spec.keyframe_interval(), 50);
+    }
+
+    #[test]
+    fn a_keyframe_interval_is_never_zero() {
+        // Zero would tell the encoder to emit only one keyframe ever, and a
+        // segmented stream would be undecodable from any point but the start.
+        let spec = ClipSpec {
+            fps: 25,
+            keyframe_seconds: 0.0,
+            ..ClipSpec::default()
+        };
+        assert_eq!(spec.keyframe_interval(), 1);
+    }
+}

@@ -10,6 +10,7 @@
 //! fMP4 segment here.
 
 use crate::media::subtitles::SubtitleTrack;
+use std::path::Path;
 
 /// What the media segments are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,11 +91,29 @@ impl HlsOptions {
         parts.join(",")
     }
 
+    /// What the variant playlist file is called.
+    ///
+    /// The `%v` is ffmpeg's variant index. It has to be there whenever
+    /// `var_stream_map` is set, which is why the name carries a number even
+    /// with a single variant.
+    pub const VARIANT_TEMPLATE: &'static str = "stream%v.m3u8";
+
+    /// What media segments are called, given the directory they live in.
+    ///
+    /// ffmpeg writes segments relative to the working directory rather than to
+    /// the playlist, so this has to be a full path.
+    pub fn segment_template(&self, directory: &Path) -> String {
+        directory
+            .join(format!("segment%v-%05d.{}", self.segment_type.extension()))
+            .to_string_lossy()
+            .into_owned()
+    }
+
     /// The options the muxer is opened with.
     ///
     /// Returned as pairs rather than a dictionary so this stays testable
     /// without touching ffmpeg.
-    pub fn as_pairs(&self, subtitles: &[SubtitleTrack]) -> Vec<(String, String)> {
+    pub fn as_pairs(&self, subtitles: &[SubtitleTrack], directory: &Path) -> Vec<(String, String)> {
         let mut pairs = vec![
             (
                 "hls_segment_type".to_string(),
@@ -106,6 +125,10 @@ impl HlsOptions {
             ("hls_time".to_string(), format!("{}", self.segment_seconds)),
             ("master_pl_name".to_string(), self.master_name.clone()),
             ("var_stream_map".to_string(), self.variant_map(subtitles)),
+            (
+                "hls_segment_filename".to_string(),
+                self.segment_template(directory),
+            ),
         ];
 
         match self.kind {
@@ -114,12 +137,26 @@ impl HlsOptions {
                 // player knows the whole thing is seekable.
                 pairs.push(("hls_list_size".to_string(), "0".to_string()));
                 pairs.push(("hls_playlist_type".to_string(), "vod".to_string()));
+                pairs.push(("hls_flags".to_string(), "independent_segments".to_string()));
             }
             PlaylistKind::Live { window_segments } => {
                 pairs.push(("hls_list_size".to_string(), window_segments.to_string()));
-                // Segments that have fallen out of the window are deleted, or a
-                // stream left running fills the disk.
-                pairs.push(("hls_flags".to_string(), "delete_segments".to_string()));
+
+                // Three flags that matter for a live window.
+                //
+                // delete_segments, or a stream left running fills the disk.
+                //
+                // temp_file, so a segment is written under another name and
+                // renamed when finished. Without it a player can fetch a
+                // segment that is still being written and get a truncated one,
+                // which shows as a jump rather than an error.
+                //
+                // program_date_time, so a player anchors to a real timeline
+                // rather than inferring one from segment durations.
+                pairs.push((
+                    "hls_flags".to_string(),
+                    "delete_segments+temp_file+program_date_time+independent_segments".to_string(),
+                ));
             }
         }
 
@@ -170,7 +207,7 @@ mod tests {
 
     #[test]
     fn vod_lists_every_segment_and_marks_itself_complete() {
-        let pairs = HlsOptions::default().as_pairs(&[]);
+        let pairs = HlsOptions::default().as_pairs(&[], Path::new("/tmp/x"));
         assert_eq!(value(&pairs, "hls_list_size"), Some("0"));
         assert_eq!(value(&pairs, "hls_playlist_type"), Some("vod"));
     }
@@ -182,10 +219,11 @@ mod tests {
             kind: PlaylistKind::Live { window_segments: 6 },
             ..HlsOptions::default()
         };
-        let pairs = options.as_pairs(&[]);
+        let pairs = options.as_pairs(&[], Path::new("/tmp/x"));
 
         assert_eq!(value(&pairs, "hls_list_size"), Some("6"));
-        assert_eq!(value(&pairs, "hls_flags"), Some("delete_segments"));
+        let flags = value(&pairs, "hls_flags").expect("a live playlist needs flags");
+        assert!(flags.contains("delete_segments"));
         assert_eq!(
             value(&pairs, "hls_playlist_type"),
             None,
@@ -194,15 +232,67 @@ mod tests {
     }
 
     #[test]
+    fn a_live_segment_is_only_published_once_it_is_complete() {
+        // Without temp_file a player can fetch a segment while it is still
+        // being written and get a truncated one, which shows as a glitch in the
+        // picture rather than an error anyone would notice.
+        let options = HlsOptions {
+            kind: PlaylistKind::Live { window_segments: 6 },
+            ..HlsOptions::default()
+        };
+        let flags = value(&options.as_pairs(&[], Path::new("/tmp/x")), "hls_flags")
+            .expect("a live playlist needs flags")
+            .to_string();
+
+        assert!(
+            flags.contains("temp_file"),
+            "segments would be published while still being written"
+        );
+    }
+
+    #[test]
+    fn a_live_playlist_carries_a_real_timeline() {
+        // Otherwise a player infers the timeline from segment durations, which
+        // leaves it guessing where the live edge is.
+        let options = HlsOptions {
+            kind: PlaylistKind::Live { window_segments: 6 },
+            ..HlsOptions::default()
+        };
+        let flags = value(&options.as_pairs(&[], Path::new("/tmp/x")), "hls_flags")
+            .expect("a live playlist needs flags")
+            .to_string();
+
+        assert!(flags.contains("program_date_time"));
+    }
+
+    #[test]
+    fn segments_are_declared_independently_decodable() {
+        // True only because the keyframe interval matches the segment length.
+        for kind in [PlaylistKind::Vod, PlaylistKind::Live { window_segments: 6 }] {
+            let options = HlsOptions {
+                kind,
+                ..HlsOptions::default()
+            };
+            let flags = value(&options.as_pairs(&[], Path::new("/tmp/x")), "hls_flags")
+                .expect("flags")
+                .to_string();
+            assert!(
+                flags.contains("independent_segments"),
+                "{kind:?} did not declare it"
+            );
+        }
+    }
+
+    #[test]
     fn the_segment_type_reaches_the_muxer() {
-        let ts = HlsOptions::default().as_pairs(&[]);
+        let ts = HlsOptions::default().as_pairs(&[], Path::new("/tmp/x"));
         assert_eq!(value(&ts, "hls_segment_type"), Some("mpegts"));
 
         let fmp4 = HlsOptions {
             segment_type: SegmentType::FragmentedMp4,
             ..HlsOptions::default()
         }
-        .as_pairs(&[]);
+        .as_pairs(&[], Path::new("/tmp/x"));
         assert_eq!(value(&fmp4, "hls_segment_type"), Some("fmp4"));
     }
 
@@ -210,5 +300,24 @@ mod tests {
     fn segment_files_are_named_for_their_type() {
         assert_eq!(SegmentType::MpegTs.extension(), "ts");
         assert_eq!(SegmentType::FragmentedMp4.extension(), "m4s");
+    }
+
+    #[test]
+    fn segments_are_written_beside_their_playlist() {
+        // ffmpeg writes segments relative to the working directory, not to the
+        // playlist, so a bare name would scatter them wherever the tool was
+        // started from.
+        let template = HlsOptions::default().segment_template(Path::new("/fixtures/live/hls"));
+        assert!(template.starts_with("/fixtures/live/hls/"));
+        assert!(template.ends_with(".ts"));
+    }
+
+    #[test]
+    fn fragmented_segments_are_named_as_such() {
+        let options = HlsOptions {
+            segment_type: SegmentType::FragmentedMp4,
+            ..HlsOptions::default()
+        };
+        assert!(options.segment_template(Path::new("/x")).ends_with(".m4s"));
     }
 }

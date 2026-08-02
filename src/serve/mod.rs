@@ -5,6 +5,7 @@
 mod demand;
 mod index;
 mod live;
+mod live_hls;
 
 use crate::fixtures::{Delivery, Fixture, catalogue};
 use axum::Router;
@@ -92,6 +93,7 @@ pub async fn run(
     let fixtures = catalogue();
     let base = format!("http://{address}");
     let demand = Demand::new(root.clone(), quiet);
+    let streams = live_hls::LiveHls::new();
 
     let progress_for_handler = Arc::clone(&progress);
 
@@ -120,6 +122,7 @@ pub async fn run(
     // generated if this is the first time anyone has asked for it.
     let app = app.fallback(axum::routing::any(on_demand).with_state(Fixtures {
         demand,
+        streams,
         progress: progress_for_handler,
         root,
     }));
@@ -143,6 +146,7 @@ pub async fn bind(address: SocketAddr) -> Result<tokio::net::TcpListener, ServeE
 #[derive(Clone)]
 struct Fixtures {
     demand: Arc<Demand>,
+    streams: Arc<live_hls::LiveHls>,
     progress: Progress,
     root: PathBuf,
 }
@@ -157,14 +161,35 @@ async fn on_demand(State(state): State<Fixtures>, request: Request) -> Response 
 
     if let Some(fixture) = catalogue()
         .into_iter()
-        .find(|fixture| fixture.route == path && fixture.delivery.is_generated_ahead())
+        .find(|fixture| fixture.route == path)
     {
         state.demand.log_request(&path);
 
-        if let Err(error) = state.demand.ensure_built(&fixture, &state.progress).await {
+        let outcome = match fixture.delivery {
+            Delivery::Vod => state.demand.ensure_built(&fixture, &state.progress).await,
+            Delivery::LiveHls => match &fixture.hls {
+                Some(options) => {
+                    state
+                        .streams
+                        .ensure_running(
+                            fixture.id,
+                            &state.root,
+                            fixture.route,
+                            &fixture.spec,
+                            options,
+                        )
+                        .await
+                }
+                None => Err("a live hls fixture with no hls options".to_string()),
+            },
+            // Progressive live is handled by its own route.
+            Delivery::Live => Ok(()),
+        };
+
+        if let Err(error) = outcome {
             return (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("could not generate {path}: {error}\n"),
+                format!("could not serve {path}: {error}\n"),
             )
                 .into_response();
         }

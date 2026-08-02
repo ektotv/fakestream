@@ -67,6 +67,7 @@ pub fn render(fixtures: &[Fixture], base: &str, readiness: &HashMap<String, Read
       .kind {{ margin: 0 0 0.5rem; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: #666; }}
       code {{ background: #f4f4f4; padding: 0.15rem 0.35rem; border-radius: 3px; }}
       .pending {{ color: #999; font-style: italic; }}
+      .kind {{ margin: 0 0 0.5rem; }}
     </style>
   </head>
   <body>

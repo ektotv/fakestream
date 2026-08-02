@@ -10,6 +10,7 @@
 //! It also means the cost scales with viewers, so this is a test tool rather
 //! than a streaming server.
 
+use super::hls::HlsOptions;
 use super::mux::ClipSpec;
 use super::{MediaError, clock, context, ffi, overlay, source::Beeps, source::paint_pattern};
 use crate::captions::libcaption::Channel;
@@ -17,8 +18,10 @@ use crate::captions::rolling::RollingCaptions;
 use rsmpeg::avcodec::{AVCodec, AVCodecContext};
 use rsmpeg::avformat::AVIOContextContainer;
 use rsmpeg::avformat::{AVFormatContextOutput, AVIOContextCustom};
-use rsmpeg::avutil::{AVChannelLayout, AVFrame, AVMem};
+use rsmpeg::avutil::{AVChannelLayout, AVDictionary, AVFrame, AVMem};
 use rsmpeg::ffi as sys;
+use std::ffi::{CStr, CString};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -31,7 +34,7 @@ pub struct LiveStream {
     sound: AVFrame,
     beeps: Beeps,
     captions: RollingCaptions,
-    muxer: TsMuxer,
+    muxer: LiveMuxer,
 
     /// Seconds since the epoch when this stream began, which the clock counts
     /// from.
@@ -46,7 +49,38 @@ pub struct LiveStream {
 }
 
 impl LiveStream {
+    /// A stream muxed into memory, for handing straight to one HTTP response.
     pub fn new(spec: ClipSpec) -> Result<Self, MediaError> {
+        Self::with_muxer(spec, LiveMuxer::memory_ts)
+    }
+
+    /// A stream segmented onto disk as HLS, for many viewers to fetch from.
+    ///
+    /// The playlist keeps a rolling window and expired segments are deleted, so
+    /// a stream left running does not fill the disk.
+    pub fn hls(spec: ClipSpec, playlist: &CStr, options: &HlsOptions) -> Result<Self, MediaError> {
+        // One group of pictures per segment. Otherwise a segment can begin part
+        // way through a group and only decode because the previous one happened
+        // to be fetched, which is what makes players stutter at boundaries.
+        let spec = ClipSpec {
+            keyframe_seconds: options.segment_seconds,
+            ..spec
+        };
+        let options = options.clone();
+        let playlist = playlist.to_owned();
+        Self::with_muxer(spec, move |spec, video, audio| {
+            LiveMuxer::hls(spec, video, audio, &playlist, &options)
+        })
+    }
+
+    fn with_muxer(
+        spec: ClipSpec,
+        make_muxer: impl FnOnce(
+            &ClipSpec,
+            &AVCodecContext,
+            &AVCodecContext,
+        ) -> Result<LiveMuxer, MediaError>,
+    ) -> Result<Self, MediaError> {
         let unix_start = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|since| since.as_secs_f64())
@@ -54,7 +88,7 @@ impl LiveStream {
 
         let video = open_video_encoder(&spec)?;
         let audio = open_audio_encoder(&spec)?;
-        let muxer = TsMuxer::new(&spec, &video, &audio)?;
+        let muxer = make_muxer(&spec, &video, &audio)?;
 
         let mut picture = AVFrame::new();
         picture.set_width(spec.width);
@@ -197,9 +231,9 @@ fn open_video_encoder(spec: &ClipSpec) -> Result<AVCodecContext, MediaError> {
         den: 1,
     });
     encoder.set_bit_rate(spec.video_bitrate);
-    // A keyframe every second, so a player joining or recovering waits at most
-    // that long for a picture.
-    encoder.set_gop_size(spec.fps);
+    // A player joining or recovering waits at most this long for a picture,
+    // and for segmented delivery it also defines the segment boundary.
+    encoder.set_gop_size(spec.keyframe_interval());
     // Latency matters more than compression here. B-frames make the encoder
     // hold frames back, which shows up directly as delay on a live stream.
     encoder.set_max_b_frames(0);
@@ -218,21 +252,99 @@ fn open_audio_encoder(spec: &ClipSpec) -> Result<AVCodecContext, MediaError> {
     Ok(encoder)
 }
 
-/// An MPEG-TS muxer writing into memory rather than to a file.
+/// Where a live stream's packets go.
 ///
-/// MPEG-TS never seeks, which is what makes it usable this way. A format that
-/// rewrites its header on close, such as MP4, could not be produced without
-/// buffering the whole stream, which is the opposite of live.
-struct TsMuxer {
+/// Either into memory for one HTTP response, or onto disk as HLS segments for
+/// many viewers. MPEG-TS never seeks, which is what makes the memory case
+/// possible at all: a format that rewrites its header on close, such as plain
+/// MP4, would have to buffer the whole stream, which is the opposite of live.
+struct LiveMuxer {
     output: AVFormatContextOutput,
-    /// Filled by the write callback, drained by the caller.
-    sink: Arc<Mutex<Vec<u8>>>,
+    /// Filled by the write callback when muxing into memory. Absent for HLS,
+    /// where the muxer writes files itself.
+    sink: Option<Arc<Mutex<Vec<u8>>>>,
     video_stream_tb: sys::AVRational,
     audio_stream_tb: sys::AVRational,
 }
 
-impl TsMuxer {
-    fn new(
+impl LiveMuxer {
+    /// Segment onto disk, letting the HLS muxer manage the rolling playlist.
+    fn hls(
+        spec: &ClipSpec,
+        video: &AVCodecContext,
+        audio: &AVCodecContext,
+        playlist: &CStr,
+        options: &HlsOptions,
+    ) -> Result<Self, MediaError> {
+        // Segments live beside the playlist, which ffmpeg needs told explicitly.
+        let directory = Path::new(playlist.to_str().unwrap_or("."))
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf();
+
+        let mut settings: Option<AVDictionary> = None;
+        for (key, value) in options.as_pairs(&spec.subtitles, &directory) {
+            let key = CString::new(key)
+                .map_err(|_| MediaError::Ffi(ffi::FfiError::Shape("bad option name")))?;
+            let value = CString::new(value)
+                .map_err(|_| MediaError::Ffi(ffi::FfiError::Shape("bad option value")))?;
+            settings = Some(match settings {
+                Some(existing) => existing.set(&key, &value, 0),
+                None => AVDictionary::new(&key, &value, 0),
+            });
+        }
+
+        let mut output = context(
+            "creating the live hls muxer",
+            AVFormatContextOutput::builder()
+                .format_name(c"hls")
+                .filename(playlist)
+                .build(),
+        )?;
+
+        Self::add_streams(&mut output, spec, video, audio);
+        context(
+            "writing the live hls header",
+            output.write_header(&mut settings),
+        )?;
+
+        if settings.is_some() {
+            return Err(MediaError::Ffmpeg {
+                doing: "configuring live hls",
+                detail: "one or more options were not recognised".to_string(),
+            });
+        }
+
+        let video_stream_tb = output.streams()[0].time_base;
+        let audio_stream_tb = output.streams()[1].time_base;
+
+        Ok(Self {
+            output,
+            sink: None,
+            video_stream_tb,
+            audio_stream_tb,
+        })
+    }
+
+    fn add_streams(
+        output: &mut AVFormatContextOutput,
+        spec: &ClipSpec,
+        video: &AVCodecContext,
+        audio: &AVCodecContext,
+    ) {
+        {
+            let mut stream = output.new_stream();
+            stream.set_codecpar(video.extract_codecpar());
+            stream.set_time_base(spec.video_time_base());
+        }
+        {
+            let mut stream = output.new_stream();
+            stream.set_codecpar(audio.extract_codecpar());
+            stream.set_time_base(spec.audio_time_base());
+        }
+    }
+
+    fn memory_ts(
         spec: &ClipSpec,
         video: &AVCodecContext,
         audio: &AVCodecContext,
@@ -268,16 +380,7 @@ impl TsMuxer {
                 .build(),
         )?;
 
-        {
-            let mut stream = output.new_stream();
-            stream.set_codecpar(video.extract_codecpar());
-            stream.set_time_base(spec.video_time_base());
-        }
-        {
-            let mut stream = output.new_stream();
-            stream.set_codecpar(audio.extract_codecpar());
-            stream.set_time_base(spec.audio_time_base());
-        }
+        Self::add_streams(&mut output, spec, video, audio);
 
         context("writing the live header", output.write_header(&mut None))?;
         // Otherwise the header sits in ffmpeg's buffer until enough media
@@ -290,7 +393,7 @@ impl TsMuxer {
 
         Ok(Self {
             output,
-            sink,
+            sink: Some(sink),
             video_stream_tb,
             audio_stream_tb,
         })
@@ -325,8 +428,15 @@ impl TsMuxer {
     }
 
     /// Hand over whatever has been written since the last call.
+    ///
+    /// Empty for HLS, where the muxer writes its own files and there is nothing
+    /// for a caller to forward.
     fn take_output(&mut self) -> Result<Vec<u8>, MediaError> {
-        match self.sink.lock() {
+        let Some(sink) = &self.sink else {
+            return Ok(Vec::new());
+        };
+
+        match sink.lock() {
             Ok(mut sink) => Ok(std::mem::take(&mut *sink)),
             Err(_) => Err(MediaError::Ffmpeg {
                 doing: "reading live output",
