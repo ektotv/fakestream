@@ -40,3 +40,20 @@ impl std::fmt::Display for FfiError {
 }
 
 impl std::error::Error for FfiError {}
+
+/// Push whatever a muxer is holding out through its IO context.
+///
+/// ffmpeg buffers output and only writes when its buffer fills. For a file that
+/// is exactly right, but on a live stream it means up to a buffer's worth of
+/// delay before a viewer sees anything, and a header small enough to sit in the
+/// buffer never arrives at all.
+pub fn flush_output(output: &mut rsmpeg::avformat::AVFormatContextOutput) {
+    // SAFETY: the context owns its IO, and flushing a null pb is a no-op in
+    // ffmpeg, so the null check is defensive rather than required.
+    unsafe {
+        let raw = output.as_mut_ptr();
+        if !(*raw).pb.is_null() {
+            rsmpeg::ffi::avio_flush((*raw).pb);
+        }
+    }
+}

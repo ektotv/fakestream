@@ -231,6 +231,7 @@ dependencies = [
  "ab_glyph",
  "axum",
  "cc",
+ "futures-core",
  "rsmpeg",
  "tokio",
  "tower-http",

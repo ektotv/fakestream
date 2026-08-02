@@ -54,21 +54,21 @@ impl ClipSpec {
         (self.duration_seconds * f64::from(self.fps)).round() as i64
     }
 
-    fn video_time_base(&self) -> sys::AVRational {
+    pub(crate) fn video_time_base(&self) -> sys::AVRational {
         sys::AVRational {
             num: 1,
             den: self.fps,
         }
     }
 
-    fn audio_time_base(&self) -> sys::AVRational {
+    pub(crate) fn audio_time_base(&self) -> sys::AVRational {
         sys::AVRational {
             num: 1,
             den: self.sample_rate,
         }
     }
 
-    fn subtitle_time_base(&self) -> sys::AVRational {
+    pub(crate) fn subtitle_time_base(&self) -> sys::AVRational {
         sys::AVRational {
             num: 1,
             den: SUBTITLE_TIMEBASE,

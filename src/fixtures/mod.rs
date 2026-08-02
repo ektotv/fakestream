@@ -18,13 +18,22 @@ use std::path::{Path, PathBuf};
 pub enum Delivery {
     /// A complete file, fetched with range requests.
     Vod,
+    /// An endless stream, generated as it is watched. Nothing is written to
+    /// disk and there is nothing to build in advance.
+    Live,
 }
 
 impl Delivery {
     pub fn label(self) -> &'static str {
         match self {
             Self::Vod => "VOD",
+            Self::Live => "LIVE",
         }
+    }
+
+    /// Live streams are produced on demand, so there is no file to cache.
+    pub fn is_generated_ahead(self) -> bool {
+        matches!(self, Self::Vod)
     }
 }
 
@@ -63,6 +72,22 @@ pub fn catalogue() -> Vec<Fixture> {
             delivery: Delivery::Vod,
             spec: ClipSpec {
                 duration_seconds: 30.0,
+                ..ClipSpec::default()
+            },
+        },
+        Fixture {
+            id: "live-ts",
+            title: "Live MPEG-TS, generated as you watch",
+            purpose: "An endless progressive stream, the shape most IPTV \
+                      providers serve. The picture carries a UTC clock, elapsed \
+                      time and a frame counter, so holding a real clock next to \
+                      the screen measures end to end latency directly, and a \
+                      stalled or looping player is obvious.",
+            route: "live/stream.ts",
+            delivery: Delivery::Live,
+            spec: ClipSpec {
+                // Unbounded in practice; the stream runs until the viewer stops.
+                duration_seconds: 0.0,
                 ..ClipSpec::default()
             },
         },
@@ -349,7 +374,11 @@ pub fn build_all(root: &Path, watcher: &mut dyn FnMut(Report<'_>)) -> Result<(),
         watcher(Report::SweptPartials(swept));
     }
 
-    let catalogue = catalogue();
+    let catalogue: Vec<Fixture> = catalogue()
+        .into_iter()
+        .filter(|fixture| fixture.delivery.is_generated_ahead())
+        .collect();
+
     for (index, fixture) in catalogue.iter().enumerate() {
         watcher(Report::Started {
             fixture,

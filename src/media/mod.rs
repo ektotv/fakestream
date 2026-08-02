@@ -1,8 +1,11 @@
 //! The media layer. Everything that touches libav* lives here, and the FFI
 //! itself is confined further, to `media::ffi`.
 
+pub mod clock;
 pub mod ffi;
+pub mod live;
 pub mod mux;
+pub mod overlay;
 pub mod source;
 pub mod subtitles;
 pub mod verify;

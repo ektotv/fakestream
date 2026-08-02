@@ -3,8 +3,9 @@
 //! anything.
 
 mod index;
+mod live;
 
-use crate::fixtures::{Fixture, catalogue};
+use crate::fixtures::{Delivery, Fixture, catalogue};
 use axum::Router;
 use axum::response::Html;
 use axum::routing::get;
@@ -53,7 +54,16 @@ pub type Progress = Arc<Mutex<HashMap<String, Readiness>>>;
 pub fn pending(fixtures: &[Fixture]) -> Progress {
     let map = fixtures
         .iter()
-        .map(|fixture| (fixture.id.to_string(), Readiness::Waiting))
+        .map(|fixture| {
+            // Live streams need no building, so they are ready immediately
+            // rather than sitting in a queue that will never reach them.
+            let state = if fixture.delivery.is_generated_ahead() {
+                Readiness::Waiting
+            } else {
+                Readiness::Ready
+            };
+            (fixture.id.to_string(), state)
+        })
         .collect();
     Arc::new(Mutex::new(map))
 }
@@ -76,12 +86,28 @@ pub async fn run(
     let fixtures = catalogue();
     let base = format!("http://{address}");
 
-    let app = Router::new()
-        .route(
-            "/",
-            get(move || index_page(fixtures, base, Arc::clone(&progress))),
-        )
-        .fallback_service(ServeDir::new(root));
+    let mut app = Router::new().route(
+        "/",
+        get({
+            let fixtures = fixtures.clone();
+            move || index_page(fixtures, base, Arc::clone(&progress))
+        }),
+    );
+
+    // Live routes are handled rather than served from disk, since nothing is
+    // written to disk for them.
+    for fixture in fixtures
+        .iter()
+        .filter(|fixture| fixture.delivery == Delivery::Live)
+    {
+        let spec = fixture.spec.clone();
+        app = app.route(
+            &format!("/{}", fixture.route),
+            get(move || live::stream(spec.clone())),
+        );
+    }
+
+    let app = app.fallback_service(ServeDir::new(root));
 
     axum::serve(listener, app).await.map_err(ServeError::Io)
 }
