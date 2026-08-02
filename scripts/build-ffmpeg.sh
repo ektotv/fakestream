@@ -19,6 +19,21 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PREFIX="$ROOT/third_party/ffmpeg"
 WORK="$PREFIX/build"
 
+# On Windows this runs under MSYS2 for the shell, but everything is compiled
+# with MSVC so it links against a Rust build for the usual windows-msvc target.
+# Mixing the two toolchains does not work, and fails at link time with errors
+# that point nowhere useful.
+TOOLCHAIN_ARGS=()
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*)
+    WINDOWS=1
+    TOOLCHAIN_ARGS+=(--toolchain=msvc)
+    ;;
+  *)
+    WINDOWS=0
+    ;;
+esac
+
 if [ -f "$PREFIX/lib/pkgconfig/libavcodec.pc" ]; then
   echo "static ffmpeg already built at $PREFIX"
   echo "delete that directory to rebuild"
@@ -44,9 +59,17 @@ if [ ! -f "$PREFIX/lib/libx264.a" ]; then
   fi
   (
     cd x264
-    ./configure --prefix="$PREFIX" --enable-static --disable-cli --disable-opencl
+    x264_args=(--prefix="$PREFIX" --enable-static --disable-cli --disable-opencl)
+    if [ "$WINDOWS" = "1" ]; then
+      # x264 has no --toolchain switch, so MSVC is selected by naming the
+      # compiler and the host it is building for.
+      x264_args+=(--host=x86_64-pc-windows-msvc)
+      export CC=cl
+    fi
+    ./configure "${x264_args[@]}"
     make -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
     make install
+    unset CC
   )
 fi
 
@@ -78,6 +101,7 @@ cd "ffmpeg-$VERSION"
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 
 ./configure \
+  "${TOOLCHAIN_ARGS[@]}" \
   --prefix="$PREFIX" \
   --disable-programs \
   --disable-doc \
@@ -108,5 +132,14 @@ make install
 echo
 echo "built static ffmpeg at $PREFIX"
 echo
-echo "now build fakestream against it:"
-echo "  FFMPEG_PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig cargo build --release --no-default-features"
+
+if [ "$WINDOWS" = "1" ]; then
+  # pkg-config is more trouble than it is worth on Windows, and rusty_ffmpeg
+  # takes the library and header directories instead.
+  echo "now build fakestream against it:"
+  echo "  FFMPEG_INCLUDE_DIR=$PREFIX/include FFMPEG_LIBS_DIR=$PREFIX/lib \\"
+  echo "    cargo build --release --no-default-features"
+else
+  echo "now build fakestream against it:"
+  echo "  FFMPEG_PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig cargo build --release --no-default-features"
+fi

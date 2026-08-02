@@ -1,0 +1,102 @@
+name: windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # ffmpeg and x264 are configured by POSIX shell scripts, so a shell is
+      # needed whatever they are compiled with.
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
+        with:
+          msystem: MSYS
+          update: true
+          # Deliberately no compilers. Everything is built with MSVC so it
+          # links against a normal windows-msvc Rust build, and having gcc on
+          # the path invites configure to pick it.
+          install: >-
+            make
+            diffutils
+            nasm
+            git
+            curl
+            tar
+
+      # Puts cl.exe and the Windows SDK on the path for the steps that follow.
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Cache the static ffmpeg
+        id: ffmpeg-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: third_party/ffmpeg
+          key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+
+      - name: Build static ffmpeg
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        shell: msys2 {0}
+        run: ./scripts/build-ffmpeg.sh
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        env:
+          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}\third_party\ffmpeg\include
+          FFMPEG_LIBS_DIR: ${{ github.workspace }}\third_party\ffmpeg\lib
+          # Links the C runtime in, so the binary runs on a clean Windows
+          # without the Visual C++ redistributable.
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+
+      - name: Test
+        env:
+          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}\third_party\ffmpeg\include
+          FFMPEG_LIBS_DIR: ${{ github.workspace }}\third_party\ffmpeg\lib
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo test --no-default-features
+
+      - name: Build release
+        env:
+          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}\third_party\ffmpeg\include
+          FFMPEG_LIBS_DIR: ${{ github.workspace }}\third_party\ffmpeg\lib
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --release --no-default-features
+
+      - name: Smoke test
+        # Generating a fixture exercises the encoders, the muxer and the caption
+        # paths, which a compile alone does not.
+        shell: pwsh
+        run: |
+          $server = Start-Process -FilePath target\release\fakestream.exe `
+            -ArgumentList 'serve','--port','8080','--quiet' -PassThru
+          Start-Sleep -Seconds 2
+          try {
+            Invoke-WebRequest -Uri http://localhost:8080/vod/basic.mp4 `
+              -OutFile basic.mp4 -TimeoutSec 300
+            if ((Get-Item basic.mp4).Length -eq 0) { throw "empty fixture" }
+          } finally {
+            Stop-Process -Id $server.Id -Force
+          }
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fakestream-windows-x86_64
+          path: target/release/fakestream.exe

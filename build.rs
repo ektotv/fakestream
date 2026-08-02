@@ -59,4 +59,35 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", headers.display());
     build.compile("caption");
+
+    link_windows_dependencies();
+}
+
+/// Name the libraries ffmpeg needs on Windows.
+///
+/// Elsewhere pkg-config supplies these. On Windows rusty_ffmpeg is pointed at a
+/// library directory instead, since pkg-config is more trouble than it is worth
+/// there, and that path links ffmpeg's own libraries and nothing else. Without
+/// these the build fails at link time with a wall of unresolved symbols that
+/// name Windows APIs rather than anything to do with this project.
+fn link_windows_dependencies() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+
+    // x264 sits beside the ffmpeg libraries, wherever those were pointed at.
+    if let Some(libs) = env::var_os("FFMPEG_LIBS_DIR") {
+        println!("cargo:rustc-link-search=native={}", Path::new(&libs).display());
+    }
+    println!("cargo:rustc-link-lib=static=libx264");
+
+    // Taken from ffmpeg's own configure, which is the only list that stays
+    // correct as it grows dependencies.
+    for library in [
+        "advapi32", "bcrypt", "gdi32", "mfplat", "mfuuid", "ole32", "oleaut32",
+        "psapi", "secur32", "shlwapi", "strmiids", "user32", "uuid", "vfw32",
+        "ws2_32",
+    ] {
+        println!("cargo:rustc-link-lib={library}");
+    }
 }
