@@ -19,19 +19,16 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PREFIX="$ROOT/third_party/ffmpeg"
 WORK="$PREFIX/build"
 
-# On Windows this runs under MSYS2 for the shell, but everything is compiled
-# with MSVC so it links against a Rust build for the usual windows-msvc target.
-# Mixing the two toolchains does not work, and fails at link time with errors
+# On Windows this runs under MSYS2 with MinGW, and the Rust side targets
+# x86_64-pc-windows-gnu to match. MSVC was tried first, since it is the
+# conventional Windows target, but ffmpeg's own source does not compile with it.
+#
+# Whichever is chosen has to apply to everything, because MinGW output cannot be
+# linked by MSVC or the reverse, and the failure is at link time with errors
 # that point nowhere useful.
-TOOLCHAIN_ARGS=()
 case "$(uname -s)" in
-  MINGW* | MSYS* | CYGWIN*)
-    WINDOWS=1
-    TOOLCHAIN_ARGS+=(--toolchain=msvc)
-    ;;
-  *)
-    WINDOWS=0
-    ;;
+  MINGW* | MSYS* | CYGWIN*) WINDOWS=1 ;;
+  *) WINDOWS=0 ;;
 esac
 
 if [ -f "$PREFIX/lib/pkgconfig/libavcodec.pc" ]; then
@@ -61,13 +58,6 @@ if [ ! -f "$PREFIX/lib/libx264.a" ] && [ ! -f "$PREFIX/lib/libx264.lib" ]; then
   (
     cd x264
     x264_args=(--prefix="$PREFIX" --enable-static --disable-cli --disable-opencl)
-    if [ "$WINDOWS" = "1" ]; then
-      # x264 picks MSVC from the compiler's name, not from a host triple, and
-      # only once the host already looks like msys, mingw or cygwin. So the
-      # host is left to be detected and only the compiler is named. Passing a
-      # windows-msvc triple is rejected by config.sub before that is reached.
-      export CC=cl
-    fi
     ./configure "${x264_args[@]}"
     make -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
     make install
@@ -103,7 +93,6 @@ cd "ffmpeg-$VERSION"
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 
 ./configure \
-  "${TOOLCHAIN_ARGS[@]}" \
   --prefix="$PREFIX" \
   --disable-programs \
   --disable-doc \
@@ -135,13 +124,5 @@ echo
 echo "built static ffmpeg at $PREFIX"
 echo
 
-if [ "$WINDOWS" = "1" ]; then
-  # pkg-config is more trouble than it is worth on Windows, and rusty_ffmpeg
-  # takes the library and header directories instead.
-  echo "now build fakestream against it:"
-  echo "  FFMPEG_INCLUDE_DIR=$PREFIX/include FFMPEG_LIBS_DIR=$PREFIX/lib \\"
-  echo "    cargo build --release --no-default-features"
-else
-  echo "now build fakestream against it:"
-  echo "  FFMPEG_PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig cargo build --release --no-default-features"
-fi
+echo "now build fakestream against it:"
+echo "  FFMPEG_PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig cargo build --release --no-default-features"
