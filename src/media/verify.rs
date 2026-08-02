@@ -132,7 +132,16 @@ pub fn subtitle_events(path: &CStr, track: usize) -> Result<Vec<SubtitleEvent>, 
         }
 
         let pts = packet.pts;
-        if let Ok(Some(subtitle)) = decoder.decode_subtitle(Some(&mut packet)) {
+
+        // A decode failure used to be swallowed here, which turned a missing
+        // decoder into an empty result and a test failure that said nothing
+        // about the cause.
+        let decoded = context(
+            "decoding a subtitle",
+            decoder.decode_subtitle(Some(&mut packet)),
+        )?;
+
+        if let Some(subtitle) = decoded {
             events.push(SubtitleEvent {
                 at: pts as f64 * f64::from(time_base.num) / f64::from(time_base.den),
                 rects: ffi::rect_geometry(&subtitle).len(),

@@ -3,3 +3,6 @@ target/
 # generated fixture cache. Anchored, or it would also match src/fixtures, the
 # module that declares them.
 /fixtures/
+
+# static ffmpeg and x264, built by scripts/build-ffmpeg.sh
+/third_party/ffmpeg/

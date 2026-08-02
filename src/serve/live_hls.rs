@@ -280,6 +280,6 @@ mod tests {
 
     #[test]
     fn a_missing_directory_reports_nothing_rather_than_failing() {
-        assert_eq!(finished_segments(Path::new("/nowhere/at/all"), "ts"), 0);
+        assert_eq!(finished_segments(Path::new("nowhere-at-all"), "ts"), 0);
     }
 }

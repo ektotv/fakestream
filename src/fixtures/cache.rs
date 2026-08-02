@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_never_current() {
-        assert!(!is_current(Path::new("/nowhere/at/all.mp4"), "abc"));
+        assert!(!is_current(Path::new("nowhere-at-all.mp4"), "abc"));
     }
 
     #[test]

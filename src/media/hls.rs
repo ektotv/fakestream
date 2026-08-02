@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn vod_lists_every_segment_and_marks_itself_complete() {
-        let pairs = HlsOptions::default().as_pairs(&[], Path::new("/tmp/x"));
+        let pairs = HlsOptions::default().as_pairs(&[], Path::new("x"));
         assert_eq!(value(&pairs, "hls_list_size"), Some("0"));
         assert_eq!(value(&pairs, "hls_playlist_type"), Some("vod"));
     }
@@ -219,7 +219,7 @@ mod tests {
             kind: PlaylistKind::Live { window_segments: 6 },
             ..HlsOptions::default()
         };
-        let pairs = options.as_pairs(&[], Path::new("/tmp/x"));
+        let pairs = options.as_pairs(&[], Path::new("x"));
 
         assert_eq!(value(&pairs, "hls_list_size"), Some("6"));
         let flags = value(&pairs, "hls_flags").expect("a live playlist needs flags");
@@ -240,7 +240,7 @@ mod tests {
             kind: PlaylistKind::Live { window_segments: 6 },
             ..HlsOptions::default()
         };
-        let flags = value(&options.as_pairs(&[], Path::new("/tmp/x")), "hls_flags")
+        let flags = value(&options.as_pairs(&[], Path::new("x")), "hls_flags")
             .expect("a live playlist needs flags")
             .to_string();
 
@@ -258,7 +258,7 @@ mod tests {
             kind: PlaylistKind::Live { window_segments: 6 },
             ..HlsOptions::default()
         };
-        let flags = value(&options.as_pairs(&[], Path::new("/tmp/x")), "hls_flags")
+        let flags = value(&options.as_pairs(&[], Path::new("x")), "hls_flags")
             .expect("a live playlist needs flags")
             .to_string();
 
@@ -273,7 +273,7 @@ mod tests {
                 kind,
                 ..HlsOptions::default()
             };
-            let flags = value(&options.as_pairs(&[], Path::new("/tmp/x")), "hls_flags")
+            let flags = value(&options.as_pairs(&[], Path::new("x")), "hls_flags")
                 .expect("flags")
                 .to_string();
             assert!(
@@ -285,14 +285,14 @@ mod tests {
 
     #[test]
     fn the_segment_type_reaches_the_muxer() {
-        let ts = HlsOptions::default().as_pairs(&[], Path::new("/tmp/x"));
+        let ts = HlsOptions::default().as_pairs(&[], Path::new("x"));
         assert_eq!(value(&ts, "hls_segment_type"), Some("mpegts"));
 
         let fmp4 = HlsOptions {
             segment_type: SegmentType::FragmentedMp4,
             ..HlsOptions::default()
         }
-        .as_pairs(&[], Path::new("/tmp/x"));
+        .as_pairs(&[], Path::new("x"));
         assert_eq!(value(&fmp4, "hls_segment_type"), Some("fmp4"));
     }
 
@@ -307,8 +307,12 @@ mod tests {
         // ffmpeg writes segments relative to the working directory, not to the
         // playlist, so a bare name would scatter them wherever the tool was
         // started from.
-        let template = HlsOptions::default().segment_template(Path::new("/fixtures/live/hls"));
-        assert!(template.starts_with("/fixtures/live/hls/"));
+        let directory = Path::new("fixtures").join("live").join("hls");
+        let template = HlsOptions::default().segment_template(&directory);
+
+        // Compared as a path rather than a string, since the separator differs
+        // by platform and the assertion is about the directory, not the style.
+        assert_eq!(Path::new(&template).parent(), Some(directory.as_path()));
         assert!(template.ends_with(".ts"));
     }
 
@@ -318,6 +322,6 @@ mod tests {
             segment_type: SegmentType::FragmentedMp4,
             ..HlsOptions::default()
         };
-        assert!(options.segment_template(Path::new("/x")).ends_with(".m4s"));
+        assert!(options.segment_template(Path::new("x")).ends_with(".m4s"));
     }
 }

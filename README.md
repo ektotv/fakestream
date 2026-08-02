@@ -68,11 +68,23 @@ fakestream build
 
 ## Building it
 
+For a binary that carries everything with it and needs nothing installed:
+
 ```
-cargo build --release
+./scripts/build-ffmpeg.sh
+FFMPEG_PKG_CONFIG_PATH=$PWD/third_party/ffmpeg/lib/pkgconfig \
+  cargo build --release --no-default-features
 ```
 
-The binary lands at `target/release/fakestream`.
+The first step builds a static ffmpeg and x264 into `third_party/ffmpeg`, which
+takes about a minute and is only done once. The binary lands at
+`target/release/fakestream` and links nothing beyond the operating system's own
+libraries.
 
-It links the ffmpeg libraries on the machine and needs ffmpeg 8 installed to
-run. A self-contained build with ffmpeg linked in is not done yet.
+For development, linking the ffmpeg already on the machine is quicker:
+
+```
+cargo build
+```
+
+That needs ffmpeg 8 installed.
