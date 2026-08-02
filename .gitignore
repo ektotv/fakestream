@@ -1,21 +1,5 @@
-# build output
-build/
 target/
-spikes/c/build/
-spikes/go/fakestream-go
-spikes/rust/target/
 
-# scratch clones used while investigating, not part of the build
-vendor/
-
-# generated fixtures
-out/
-*.mp4
-*.ts
-*.m3u8
-*.vtt
-*.srt
-
-# generated fixture cache at the repo root. Anchored, or it would also match
-# src/fixtures, the module that declares them.
+# generated fixture cache. Anchored, or it would also match src/fixtures, the
+# module that declares them.
 /fixtures/
