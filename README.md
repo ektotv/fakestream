@@ -50,8 +50,14 @@ sudo install fakestream-v*/fakestream /usr/local/bin/
 ### Windows (x86_64)
 
 ```bat
-curl -fsSL -o install.bat https://raw.githubusercontent.com/ektotv/fakestream/main/scripts/install.bat && install.bat
+curl.exe -fsSL -o install.bat https://raw.githubusercontent.com/ektotv/fakestream/main/scripts/install.bat
+.\install.bat
 ```
+
+Two lines rather than one joined with `&&`, which Windows PowerShell does not
+accept, and `curl.exe` rather than `curl`, which PowerShell aliases to
+something that takes different flags. Written this way it pastes into cmd and
+any PowerShell alike.
 
 ### Manually
 
