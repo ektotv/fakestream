@@ -118,10 +118,11 @@ fn link_windows_dependencies() {
                     {
                         named.push(name.to_string());
                     }
-                } else if let Some(dir) = flag.strip_prefix("-L") {
-                    if !dir.contains("${") && !searched.iter().any(|seen| seen == dir) {
-                        searched.push(dir.to_string());
-                    }
+                } else if let Some(dir) = flag.strip_prefix("-L")
+                    && !dir.contains("${")
+                    && !searched.iter().any(|seen| seen == dir)
+                {
+                    searched.push(dir.to_string());
                 }
             }
         }
