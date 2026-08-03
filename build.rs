@@ -155,6 +155,19 @@ fn link_windows_dependencies() {
         println!("cargo:rustc-link-arg=-l{name}");
     }
 
+    // The mingw C runtime once more, after everything above. rustc names these
+    // libraries itself, but earlier in the link command, and GNU ld does not
+    // rescan an archive it has already passed, so the objects pulled from
+    // libx264.a and ffmpeg at the end of the line found no runtime left to
+    // resolve against. gcc's own default link names the runtime twice for the
+    // same reason. moldname is the mapping from POSIX names such as fileno to
+    // their underscored msvcrt forms, and rustc does not name it at all.
+    if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu") {
+        for name in ["moldname", "mingwex", "msvcrt", "kernel32"] {
+            println!("cargo:rustc-link-arg=-l{name}");
+        }
+    }
+
     // Printed so a link failure can be diagnosed from the CI log rather than
     // by another guess at what ffmpeg wanted.
     println!("cargo:warning=linking against: {}", named.join(" "));
