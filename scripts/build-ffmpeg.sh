@@ -86,12 +86,15 @@ cd "ffmpeg-$VERSION"
 # subtitles is ass, dvbsub, mov_text, subrip, ttml and webvtt, plus the ttml
 # muxer that the mp4 muxer instantiates for itself.
 #
-# xlib and iconv are disabled explicitly. --disable-everything turns off
-# components, not external libraries, so ffmpeg detects and links whatever it
-# finds. X11 is not wanted at all, and iconv only converts subtitle character
-# sets, which is no use here since every caption is generated as UTF-8. On
-# Windows iconv also exports its symbols under a different name and fights the
-# link, so dropping it removes a problem rather than solving one.
+# --disable-everything turns off components but leaves external libraries alone,
+# so ffmpeg links against whatever it happens to find on the machine. That was
+# dragging in X11, iconv, zlib and a TLS stack, none of which are wanted, and
+# each one only announced itself as a link error on a platform that lacked it.
+# --disable-autodetect turns the lot off and lets libx264 back in by name, which
+# is the only external library this needs.
+#
+# Networking goes too. fakestream serves over its own HTTP stack and never asks
+# ffmpeg to open a socket.
 # So ffmpeg finds the x264 built above rather than the system one.
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 
@@ -113,10 +116,8 @@ export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
   --enable-protocol=file,pipe \
   --enable-filter=testsrc2,sine,aresample,aformat,scale,format,null,anull \
   --enable-bsf=h264_mp4toannexb,extract_extradata \
-  --disable-xlib \
-  --disable-iconv \
-  --disable-libxcb \
-  --disable-sdl2 \
+  --disable-autodetect \
+  --disable-network \
   --pkg-config-flags=--static \
   --extra-cflags="-I$PREFIX/include" \
   --extra-ldflags="-L$PREFIX/lib"
