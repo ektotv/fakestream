@@ -70,9 +70,11 @@ fn main() {
 /// at a library directory instead and links ffmpeg's own libraries and nothing
 /// else. Everything they in turn depend on is ours to name.
 ///
-/// Rather than keep a hand-written list, which was wrong twice, this reads
-/// ffmpeg's own pkg-config files. They are written by the build we just ran, so
-/// they stay correct as its dependencies change.
+/// Two sources, because neither alone was enough. ffmpeg's own pkg-config
+/// files name what it was built against, such as x264 and iconv, and stay
+/// correct as that changes. The Windows system libraries are added regardless,
+/// since the .pc files do not always mention them and each omission costs a
+/// full CI round trip to find.
 fn link_windows_dependencies() {
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
@@ -128,10 +130,27 @@ fn link_windows_dependencies() {
         }
     }
 
+    // Windows system libraries ffmpeg uses, whether or not its pkg-config
+    // files mention them. They are stable parts of the OS, so naming them
+    // unconditionally costs nothing and stops a missing one turning into
+    // another round trip through CI.
+    for name in [
+        "advapi32", "bcrypt", "gdi32", "mfplat", "mfuuid", "ole32", "oleaut32", "psapi", "secur32",
+        "shlwapi", "strmiids", "user32", "uuid", "vfw32", "ws2_32",
+    ] {
+        if !named.iter().any(|seen| seen == name) {
+            named.push(name.to_string());
+        }
+    }
+
     for dir in searched {
         println!("cargo:rustc-link-search=native={dir}");
     }
-    for name in named {
+    for name in &named {
         println!("cargo:rustc-link-lib={name}");
     }
+
+    // Printed so a link failure can be diagnosed from the CI log rather than
+    // by another guess at what ffmpeg wanted.
+    println!("cargo:warning=linking against: {}", named.join(" "));
 }
