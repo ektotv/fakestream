@@ -2,11 +2,13 @@ name: build
 
 # One workflow for checks and releases, so a release repackages the exact
 # binaries that passed the checks rather than rebuilding something similar.
-# The platform jobs run on every push and pull request; the release job only
-# wakes for a version tag.
+#
+# Work reaches main through pull requests, so there is no push trigger for
+# branches: a PR run checks the content, and building main again after the
+# merge would repeat it. On a PR the platform jobs stop after the tests;
+# release binaries are only built and published for a version tag.
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   pull_request:
 
@@ -71,12 +73,16 @@ jobs:
           FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/third_party/ffmpeg/lib/pkgconfig
         run: cargo test --no-default-features
 
+      # Everything below only runs for a version tag: a PR needs the checks
+      # above, not a shippable binary.
       - name: Build release
+        if: github.ref_type == 'tag'
         env:
           FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/third_party/ffmpeg/lib/pkgconfig
         run: cargo build --release --no-default-features
 
       - name: Check the binary carries ffmpeg with it
+        if: github.ref_type == 'tag'
         # The point of the static build is that it needs nothing installed, so
         # a linked ffmpeg here means the build quietly fell back to a system one.
         run: |
@@ -87,6 +93,7 @@ jobs:
           ldd target/release/fakestream
 
       - name: Smoke test
+        if: github.ref_type == 'tag'
         # Generating one fixture exercises the encoders, the muxer and the
         # caption paths, which a compile alone does not.
         run: |
@@ -96,6 +103,7 @@ jobs:
           test -s /tmp/basic.mp4
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.ref_type == 'tag'
         with:
           name: fakestream-linux-x86_64
           path: target/release/fakestream
@@ -142,12 +150,16 @@ jobs:
           FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/third_party/ffmpeg/lib/pkgconfig
         run: cargo test --no-default-features
 
+      # Everything below only runs for a version tag: a PR needs the checks
+      # above, not a shippable binary.
       - name: Build release
+        if: github.ref_type == 'tag'
         env:
           FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/third_party/ffmpeg/lib/pkgconfig
         run: cargo build --release --no-default-features
 
       - name: Check the binary carries ffmpeg with it
+        if: github.ref_type == 'tag'
         run: |
           if otool -L target/release/fakestream | grep -E 'libav|libsw|libx264'; then
             echo "the binary links ffmpeg rather than carrying it" >&2
@@ -156,6 +168,7 @@ jobs:
           otool -L target/release/fakestream
 
       - name: Smoke test
+        if: github.ref_type == 'tag'
         run: |
           ./target/release/fakestream serve --port 8080 --quiet &
           sleep 2
@@ -163,6 +176,7 @@ jobs:
           test -s /tmp/basic.mp4
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.ref_type == 'tag'
         with:
           name: fakestream-macos-arm64
           path: target/release/fakestream
@@ -239,10 +253,14 @@ jobs:
       - name: Test
         run: cargo test --no-default-features --target x86_64-pc-windows-gnu
 
+      # Everything below only runs for a version tag: a PR needs the checks
+      # above, not a shippable binary.
       - name: Build release
+        if: github.ref_type == 'tag'
         run: cargo build --release --no-default-features --target x86_64-pc-windows-gnu
 
       - name: Smoke test
+        if: github.ref_type == 'tag'
         # Generating a fixture exercises the encoders, the muxer and the caption
         # paths, which a compile alone does not.
         run: |
@@ -260,6 +278,7 @@ jobs:
           done
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.ref_type == 'tag'
         with:
           name: fakestream-windows-x86_64
           path: target/x86_64-pc-windows-gnu/release/fakestream.exe
