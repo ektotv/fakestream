@@ -1,0 +1,332 @@
+name: build
+
+# One workflow for checks and releases, so a release repackages the exact
+# binaries that passed the checks rather than rebuilding something similar.
+# The platform jobs run on every push and pull request; the release job only
+# wakes for a version tag.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+# A new push replaces the answer the previous run was computing, so the old
+# run is cancelled rather than left burning a runner.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Actions are pinned to a commit rather than a tag, since a tag can be
+      # moved to point at different code. The version alongside is what that
+      # commit was released as.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install build tools
+        # nasm is for x264's assembly, and pkg-config is how the ffmpeg build
+        # and rusty_ffmpeg find each other.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm pkg-config
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          # Named explicitly because this action normally reads the toolchain
+          # from the ref it was called by, which a commit pin does not carry.
+          toolchain: stable
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Cache the static ffmpeg
+        id: ffmpeg-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: third_party/ffmpeg
+          # Keyed on the script, so changing a configure flag rebuilds and
+          # nothing else does. Without this every run pays the whole build.
+          key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+
+      - name: Build static ffmpeg
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: ./scripts/build-ffmpeg.sh
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        env:
+          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/third_party/ffmpeg/lib/pkgconfig
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+
+      - name: Test
+        env:
+          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/third_party/ffmpeg/lib/pkgconfig
+        run: cargo test --no-default-features
+
+      - name: Build release
+        env:
+          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/third_party/ffmpeg/lib/pkgconfig
+        run: cargo build --release --no-default-features
+
+      - name: Check the binary carries ffmpeg with it
+        # The point of the static build is that it needs nothing installed, so
+        # a linked ffmpeg here means the build quietly fell back to a system one.
+        run: |
+          if ldd target/release/fakestream | grep -E 'libav|libsw|libx264'; then
+            echo "the binary links ffmpeg rather than carrying it" >&2
+            exit 1
+          fi
+          ldd target/release/fakestream
+
+      - name: Smoke test
+        # Generating one fixture exercises the encoders, the muxer and the
+        # caption paths, which a compile alone does not.
+        run: |
+          ./target/release/fakestream serve --port 8080 --quiet &
+          sleep 2
+          curl --fail --max-time 300 -o /tmp/basic.mp4 http://localhost:8080/vod/basic.mp4
+          test -s /tmp/basic.mp4
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fakestream-linux-x86_64
+          path: target/release/fakestream
+
+  macos:
+    # macos-latest is Apple Silicon, so this builds the arm64 binary. There is
+    # no install step: x264's arm64 assembly goes through clang rather than
+    # nasm, and the runner image ships pkg-config.
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Cache the static ffmpeg
+        id: ffmpeg-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: third_party/ffmpeg
+          # The arch is in the key so an Intel job added later cannot collide
+          # with the arm64 cache.
+          key: ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+
+      - name: Build static ffmpeg
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: ./scripts/build-ffmpeg.sh
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        env:
+          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/third_party/ffmpeg/lib/pkgconfig
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+
+      - name: Test
+        env:
+          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/third_party/ffmpeg/lib/pkgconfig
+        run: cargo test --no-default-features
+
+      - name: Build release
+        env:
+          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/third_party/ffmpeg/lib/pkgconfig
+        run: cargo build --release --no-default-features
+
+      - name: Check the binary carries ffmpeg with it
+        run: |
+          if otool -L target/release/fakestream | grep -E 'libav|libsw|libx264'; then
+            echo "the binary links ffmpeg rather than carrying it" >&2
+            exit 1
+          fi
+          otool -L target/release/fakestream
+
+      - name: Smoke test
+        run: |
+          ./target/release/fakestream serve --port 8080 --quiet &
+          sleep 2
+          curl --fail --max-time 300 -o /tmp/basic.mp4 http://localhost:8080/vod/basic.mp4
+          test -s /tmp/basic.mp4
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fakestream-macos-arm64
+          path: target/release/fakestream
+
+  windows:
+    runs-on: windows-latest
+
+    # MinGW rather than MSVC. MSVC gets as far as compiling ffmpeg and then
+    # fails inside its source, on constructs it does not accept, and patching
+    # ffmpeg to suit us is not a road worth starting down. MinGW is what
+    # ffmpeg's own Windows builds use, so it is the path with the fewest
+    # surprises.
+    #
+    # That choice applies to everything: ffmpeg, x264, libcaption and Rust all
+    # have to agree, since MinGW output cannot be linked by MSVC or the reverse.
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    # rusty_ffmpeg's pkg-config support is compiled out on Windows, so it is
+    # pointed at the directories instead and build.rs supplies the libraries
+    # that pkg-config would otherwise have named.
+    env:
+      FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/third_party/ffmpeg/include
+      FFMPEG_LIBS_DIR: ${{ github.workspace }}/third_party/ffmpeg/lib
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
+        with:
+          msystem: MINGW64
+          update: true
+          # Inherited so the Rust toolchain installed below is reachable from
+          # this shell.
+          path-type: inherit
+          install: >-
+            make
+            diffutils
+            git
+            curl
+            tar
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-pkgconf
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-gnu
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: windows-gnu
+
+      - name: Cache the static ffmpeg
+        id: ffmpeg-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: third_party/ffmpeg
+          key: ffmpeg-${{ runner.os }}-mingw-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+
+      - name: Build static ffmpeg
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: ./scripts/build-ffmpeg.sh
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --no-default-features --target x86_64-pc-windows-gnu -- -D warnings
+
+      - name: Test
+        run: cargo test --no-default-features --target x86_64-pc-windows-gnu
+
+      - name: Build release
+        run: cargo build --release --no-default-features --target x86_64-pc-windows-gnu
+
+      - name: Smoke test
+        # Generating a fixture exercises the encoders, the muxer and the caption
+        # paths, which a compile alone does not.
+        run: |
+          ./target/x86_64-pc-windows-gnu/release/fakestream.exe serve --port 8080 --quiet &
+          sleep 3
+          curl --fail --max-time 300 -o basic.mp4 http://localhost:8080/vod/basic.mp4
+          test -s basic.mp4
+
+      - name: Show why the build failed
+        if: failure()
+        run: |
+          for log in third_party/ffmpeg/build/x264/config.log \
+                     third_party/ffmpeg/build/ffmpeg-*/ffbuild/config.log; do
+            [ -f "$log" ] && echo "=== $log ===" && tail -40 "$log"
+          done
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fakestream-windows-x86_64
+          path: target/x86_64-pc-windows-gnu/release/fakestream.exe
+
+  release:
+    # Only a version tag reaches here, publishing the artifacts the three
+    # platform jobs just built and checked. cargo-release cuts the tags; see
+    # release.toml.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+
+      - name: The binary must agree with the tag about its version
+        # Tagging without bumping Cargo.toml would otherwise ship a binary
+        # that reports the previous version forever.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          chmod +x dist/fakestream-linux-x86_64/fakestream
+          reported=$(dist/fakestream-linux-x86_64/fakestream --version)
+          echo "$reported"
+          case "$reported" in
+            "fakestream $version ("*) ;;
+            *)
+              echo "tag says $version but the binary says otherwise" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Package
+        # tar.gz where tar is at hand, zip where it is not, each with the
+        # licence and README beside the binary.
+        run: |
+          mkdir out
+          for platform in linux-x86_64 macos-arm64; do
+            staging="fakestream-${GITHUB_REF_NAME}-${platform}"
+            mkdir "$staging"
+            cp "dist/fakestream-${platform}/fakestream" "$staging/"
+            chmod +x "$staging/fakestream"
+            cp README.md LICENSE "$staging/"
+            tar czf "out/${staging}.tar.gz" "$staging"
+          done
+
+          staging="fakestream-${GITHUB_REF_NAME}-windows-x86_64"
+          mkdir "$staging"
+          cp dist/fakestream-windows-x86_64/fakestream.exe "$staging/"
+          cp README.md LICENSE "$staging/"
+          (cd "$staging" && zip -qr "../out/${staging}.zip" .)
+
+          (cd out && sha256sum ./* > SHA256SUMS)
+          ls -la out
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=(--generate-notes --verify-tag)
+          # A hyphen in the version marks a pre-release, such as v0.2.0-rc.1.
+          case "$GITHUB_REF_NAME" in
+            *-*) flags+=(--prerelease) ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" out/* "${flags[@]}"

@@ -1,0 +1,19 @@
+# cargo-release drives version bumps: it edits Cargo.toml, commits, tags
+# v{version} and pushes, and the tag wakes the release job in
+# .github/workflows/build.yml, which packages the binaries the platform jobs
+# built and publishes the GitHub release.
+#
+# Usage: cargo release patch|minor|major --execute
+
+# Nothing goes to crates.io; releases are the binaries on GitHub.
+publish = false
+
+# Releases are cut from main only, since that is what CI has checked.
+allow-branch = ["main"]
+
+tag-name = "v{{version}}"
+pre-release-commit-message = "release {{version}}"
+
+# The push is the release trigger, so it is part of the release rather than a
+# separate step to forget.
+push = true
