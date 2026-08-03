@@ -70,17 +70,29 @@ jobs:
 
       - name: Clippy
         env:
-          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/third_party/ffmpeg/lib/pkgconfig
+          # rusty_ffmpeg's pkg-config support is compiled out on Windows, so
+          # it is pointed at the directories instead and build.rs supplies the
+          # libraries that pkg-config would otherwise have named.
+          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/third_party/ffmpeg/include
+          FFMPEG_LIBS_DIR: ${{ github.workspace }}/third_party/ffmpeg/lib
         run: cargo clippy --all-targets --no-default-features --target x86_64-pc-windows-gnu -- -D warnings
 
       - name: Test
         env:
-          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/third_party/ffmpeg/lib/pkgconfig
+          # rusty_ffmpeg's pkg-config support is compiled out on Windows, so
+          # it is pointed at the directories instead and build.rs supplies the
+          # libraries that pkg-config would otherwise have named.
+          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/third_party/ffmpeg/include
+          FFMPEG_LIBS_DIR: ${{ github.workspace }}/third_party/ffmpeg/lib
         run: cargo test --no-default-features --target x86_64-pc-windows-gnu
 
       - name: Build release
         env:
-          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/third_party/ffmpeg/lib/pkgconfig
+          # rusty_ffmpeg's pkg-config support is compiled out on Windows, so
+          # it is pointed at the directories instead and build.rs supplies the
+          # libraries that pkg-config would otherwise have named.
+          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/third_party/ffmpeg/include
+          FFMPEG_LIBS_DIR: ${{ github.workspace }}/third_party/ffmpeg/lib
         run: cargo build --release --no-default-features --target x86_64-pc-windows-gnu
 
       - name: Smoke test

@@ -65,11 +65,11 @@ fn main() {
 
 /// Name the libraries ffmpeg needs on Windows, when pkg-config is not in play.
 ///
-/// pkg-config supplies these, and it is used on every platform including
-/// Windows under MSYS2. This is here for the other route rusty_ffmpeg offers,
-/// where it is pointed at a library directory instead and links ffmpeg's own
-/// libraries and nothing else. Without these that route fails with a wall of
-/// unresolved symbols naming Windows APIs rather than anything in this project.
+/// Everywhere else pkg-config names these. On Windows rusty_ffmpeg has no
+/// pkg-config support at all, it is compiled out, so it is pointed at a library
+/// directory instead and links ffmpeg's own libraries and nothing else. Without
+/// these the build fails with a wall of unresolved symbols naming Windows APIs
+/// rather than anything in this project.
 fn link_windows_dependencies() {
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
