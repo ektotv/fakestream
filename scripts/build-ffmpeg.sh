@@ -19,18 +19,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PREFIX="$ROOT/third_party/ffmpeg"
 WORK="$PREFIX/build"
 
-# On Windows this runs under MSYS2 with MinGW, and the Rust side targets
-# x86_64-pc-windows-gnu to match. MSVC was tried first, since it is the
-# conventional Windows target, but ffmpeg's own source does not compile with it.
-#
-# Whichever is chosen has to apply to everything, because MinGW output cannot be
-# linked by MSVC or the reverse, and the failure is at link time with errors
-# that point nowhere useful.
-case "$(uname -s)" in
-  MINGW* | MSYS* | CYGWIN*) WINDOWS=1 ;;
-  *) WINDOWS=0 ;;
-esac
-
 if [ -f "$PREFIX/lib/pkgconfig/libavcodec.pc" ]; then
   echo "static ffmpeg already built at $PREFIX"
   echo "delete that directory to rebuild"
@@ -57,11 +45,9 @@ if [ ! -f "$PREFIX/lib/libx264.a" ] && [ ! -f "$PREFIX/lib/libx264.lib" ]; then
   fi
   (
     cd x264
-    x264_args=(--prefix="$PREFIX" --enable-static --disable-cli --disable-opencl)
-    ./configure "${x264_args[@]}"
+    ./configure --prefix="$PREFIX" --enable-static --disable-cli --disable-opencl
     make -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
     make install
-    unset CC
   )
 fi
 
@@ -132,6 +118,5 @@ make install
 echo
 echo "built static ffmpeg at $PREFIX"
 echo
-
 echo "now build fakestream against it:"
 echo "  FFMPEG_PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig cargo build --release --no-default-features"

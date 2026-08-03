@@ -114,17 +114,13 @@ fn link_windows_dependencies() {
             for flag in flags.split_whitespace() {
                 if let Some(name) = flag.strip_prefix("-l") {
                     // ffmpeg's own libraries are linked by rusty_ffmpeg.
-                    if !name.starts_with("av")
-                        && !name.starts_with("sw")
-                        && !named.iter().any(|seen| seen == name)
-                    {
-                        named.push(name.to_string());
+                    if !name.starts_with("av") && !name.starts_with("sw") {
+                        push_unique(&mut named, name);
                     }
                 } else if let Some(dir) = flag.strip_prefix("-L")
                     && !dir.contains("${")
-                    && !searched.iter().any(|seen| seen == dir)
                 {
-                    searched.push(dir.to_string());
+                    push_unique(&mut searched, dir);
                 }
             }
         }
@@ -138,9 +134,7 @@ fn link_windows_dependencies() {
         "advapi32", "bcrypt", "gdi32", "mfplat", "mfuuid", "ole32", "oleaut32", "psapi", "secur32",
         "shlwapi", "strmiids", "user32", "uuid", "vfw32", "ws2_32",
     ] {
-        if !named.iter().any(|seen| seen == name) {
-            named.push(name.to_string());
-        }
+        push_unique(&mut named, name);
     }
 
     for dir in searched {
@@ -171,4 +165,13 @@ fn link_windows_dependencies() {
     // Printed so a link failure can be diagnosed from the CI log rather than
     // by another guess at what ffmpeg wanted.
     println!("cargo:warning=linking against: {}", named.join(" "));
+}
+
+/// Push a value unless it is already present, keeping first-seen order. The
+/// link command repeats libraries across .pc files, and naming one twice is
+/// harmless but noisy.
+fn push_unique(values: &mut Vec<String>, value: &str) {
+    if !values.iter().any(|seen| seen == value) {
+        values.push(value.to_string());
+    }
 }

@@ -24,6 +24,13 @@ jobs:
       run:
         shell: msys2 {0}
 
+    # rusty_ffmpeg's pkg-config support is compiled out on Windows, so it is
+    # pointed at the directories instead and build.rs supplies the libraries
+    # that pkg-config would otherwise have named.
+    env:
+      FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/third_party/ffmpeg/include
+      FFMPEG_LIBS_DIR: ${{ github.workspace }}/third_party/ffmpeg/lib
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -69,30 +76,12 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        env:
-          # rusty_ffmpeg's pkg-config support is compiled out on Windows, so
-          # it is pointed at the directories instead and build.rs supplies the
-          # libraries that pkg-config would otherwise have named.
-          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/third_party/ffmpeg/include
-          FFMPEG_LIBS_DIR: ${{ github.workspace }}/third_party/ffmpeg/lib
         run: cargo clippy --all-targets --no-default-features --target x86_64-pc-windows-gnu -- -D warnings
 
       - name: Test
-        env:
-          # rusty_ffmpeg's pkg-config support is compiled out on Windows, so
-          # it is pointed at the directories instead and build.rs supplies the
-          # libraries that pkg-config would otherwise have named.
-          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/third_party/ffmpeg/include
-          FFMPEG_LIBS_DIR: ${{ github.workspace }}/third_party/ffmpeg/lib
         run: cargo test --no-default-features --target x86_64-pc-windows-gnu
 
       - name: Build release
-        env:
-          # rusty_ffmpeg's pkg-config support is compiled out on Windows, so
-          # it is pointed at the directories instead and build.rs supplies the
-          # libraries that pkg-config would otherwise have named.
-          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/third_party/ffmpeg/include
-          FFMPEG_LIBS_DIR: ${{ github.workspace }}/third_party/ffmpeg/lib
         run: cargo build --release --no-default-features --target x86_64-pc-windows-gnu
 
       - name: Smoke test
