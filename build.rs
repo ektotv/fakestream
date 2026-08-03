@@ -146,8 +146,13 @@ fn link_windows_dependencies() {
     for dir in searched {
         println!("cargo:rustc-link-search=native={dir}");
     }
+    // Raw linker args rather than rustc-link-lib. Cargo places this crate's
+    // rustc-link-lib flags before the dependency rlibs, but the objects that
+    // need these symbols are ffmpeg's, bundled inside rusty_ffmpeg's rlib, and
+    // GNU ld resolves strictly left to right. rustc-link-arg flags land at the
+    // end of the link command, after the rlibs, where ld can resolve them.
     for name in &named {
-        println!("cargo:rustc-link-lib={name}");
+        println!("cargo:rustc-link-arg=-l{name}");
     }
 
     // Printed so a link failure can be diagnosed from the CI log rather than
