@@ -86,9 +86,12 @@ cd "ffmpeg-$VERSION"
 # subtitles is ass, dvbsub, mov_text, subrip, ttml and webvtt, plus the ttml
 # muxer that the mp4 muxer instantiates for itself.
 #
-# xlib and friends are disabled explicitly. --disable-everything turns off
-# components, not external libraries, so ffmpeg would otherwise detect X11 and
-# leave the binary depending on it for no reason.
+# xlib and iconv are disabled explicitly. --disable-everything turns off
+# components, not external libraries, so ffmpeg detects and links whatever it
+# finds. X11 is not wanted at all, and iconv only converts subtitle character
+# sets, which is no use here since every caption is generated as UTF-8. On
+# Windows iconv also exports its symbols under a different name and fights the
+# link, so dropping it removes a problem rather than solving one.
 # So ffmpeg finds the x264 built above rather than the system one.
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 
@@ -111,6 +114,7 @@ export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
   --enable-filter=testsrc2,sine,aresample,aformat,scale,format,null,anull \
   --enable-bsf=h264_mp4toannexb,extract_extradata \
   --disable-xlib \
+  --disable-iconv \
   --disable-libxcb \
   --disable-sdl2 \
   --pkg-config-flags=--static \
