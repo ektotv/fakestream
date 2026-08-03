@@ -3,8 +3,9 @@ rem Downloads the latest fakestream release for Windows x86_64, verifies it
 rem against the release's SHA256SUMS, and unpacks it into the current
 rem directory. Needs Windows 10 or later, which ships curl and tar.
 rem
-rem Usage:
-rem   curl -fsSL -o install.bat https://raw.githubusercontent.com/ektotv/fakestream/main/scripts/install.bat && install.bat
+rem Usage, two lines so it works in cmd and PowerShell alike:
+rem   curl.exe -fsSL -o install.bat https://raw.githubusercontent.com/ektotv/fakestream/main/scripts/install.bat
+rem   .\install.bat
 
 setlocal enabledelayedexpansion
 set REPO=ektotv/fakestream
