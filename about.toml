@@ -1,0 +1,18 @@
+# Configuration for cargo-about, which generates THIRD_PARTY_LICENSES.
+# Regenerate with scripts/generate-licenses.sh after dependency changes;
+# a release refuses to build if the file is stale.
+
+accepted = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+
+# fakestream itself is not among its own third parties; its licence heads the
+# --licenses output already.
+[private]
+ignore = true

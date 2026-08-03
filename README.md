@@ -129,6 +129,7 @@ Both commands take the same flags:
 | `--port PORT` | port to listen on, default 8080 (serve only) |
 | `--quiet` | drop the progress bar, keeping one line per fixture |
 | `--verbose` | let ffmpeg log everything, for diagnosing a bad file |
+| `--licenses` | print the licences of everything in the binary |
 | `-v`, `--version` | print the version, commit and build date |
 | `-h`, `--help` | print usage |
 
@@ -182,4 +183,6 @@ That needs ffmpeg 8 installed.
 
 ## Licence
 
-GPL-3.0.
+GPL-3.0. The binary carries the licence texts of everything statically linked
+inside it, ffmpeg, x264, libcaption, the Noto Sans font and every Rust crate;
+`fakestream --licenses` prints the lot.
