@@ -18,11 +18,21 @@ options:
   --port PORT   port to listen on (default: 8080)
   --quiet       drop the progress bar, keeping one line per fixture
   --verbose     let ffmpeg log everything, for diagnosing a bad file
+  -v, --version print the version, commit and build date
 ";
 
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let command = arguments.first().map(String::as_str).unwrap_or("serve");
+
+    // Before option parsing, so `fakestream serve --version` is not an error.
+    if arguments
+        .iter()
+        .any(|argument| argument == "-v" || argument == "--version")
+    {
+        println!("{}", version_line());
+        return;
+    }
 
     let options = match Options::parse(&arguments) {
         Ok(options) => options,
@@ -129,7 +139,47 @@ fn build(dir: &std::path::Path, quiet: bool) {
     }
 }
 
+/// The semver, then which commit and day produced the binary.
+///
+/// A bug report starts with which build produced it, and downloaded binaries
+/// outlive anyone's memory of where they came from.
+fn version_line() -> String {
+    format!(
+        "fakestream {} ({}, built {})",
+        env!("CARGO_PKG_VERSION"),
+        env!("FAKESTREAM_GIT_SHA"),
+        env!("FAKESTREAM_BUILD_DATE"),
+    )
+}
+
 fn fail(message: &str) -> ! {
     eprintln!("{message}");
     std::process::exit(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_version_line_opens_with_the_semver() {
+        let expected = format!("fakestream {} (", env!("CARGO_PKG_VERSION"));
+        assert!(version_line().starts_with(&expected));
+    }
+
+    #[test]
+    fn the_build_date_is_a_calendar_date() {
+        let line = version_line();
+        let date = line
+            .rsplit("built ")
+            .next()
+            .expect("a built section")
+            .trim_end_matches(')');
+
+        // Year first so lines sort, two digit month and day so widths agree.
+        assert_eq!(date.len(), 10, "got: {date}");
+        assert_eq!(&date[4..5], "-");
+        assert_eq!(&date[7..8], "-");
+        assert!(date.chars().filter(|c| c.is_ascii_digit()).count() == 8);
+    }
 }
