@@ -292,7 +292,8 @@ pub fn catalogue() -> Vec<Fixture> {
             id: "vod-mkv-webvtt",
             title: "Matroska with WebVTT subtitles",
             purpose: "WebVTT away from HLS. Its usual home is a separate HLS \
-                      rendition, which is not built yet.",
+                      rendition, which the HLS fixtures carry; this is the same \
+                      format carried inside a container instead.",
             route: "vod/webvtt.mkv",
             delivery: Delivery::Vod,
             spec: ClipSpec {
@@ -310,10 +311,12 @@ pub fn catalogue() -> Vec<Fixture> {
         Fixture {
             id: "hls-ts",
             title: "HLS with MPEG-TS segments",
-            purpose: "Segmented delivery with WebVTT subtitle renditions in \
-                      four languages, announced in the master playlist. This is \
-                      what most IPTV services serve, and the subtitles arrive as \
-                      separate renditions rather than inside the media.",
+            purpose: "Segmented delivery with a WebVTT subtitle rendition \
+                      announced in the master playlist. This is what most IPTV \
+                      services serve, and the subtitles arrive as a separate \
+                      rendition rather than inside the media. One language, \
+                      which is a limit of ffmpeg's HLS muxer; the multilingual \
+                      Matroska fixture covers language selection.",
             route: "hls/ts/master.m3u8",
             delivery: Delivery::Vod,
             spec: ClipSpec {
