@@ -88,6 +88,15 @@ jobs:
 
       # Everything below only runs for a version tag: a PR needs the checks
       # above, not a shippable binary.
+      - name: Third party licences are current
+        if: github.ref_type == 'tag'
+        # --licenses embeds the committed THIRD_PARTY_LICENSES, so a release
+        # with stale attributions is refused here rather than shipped.
+        run: |
+          cargo install cargo-about --locked --features cli
+          ./scripts/generate-licenses.sh
+          git diff --exit-code THIRD_PARTY_LICENSES
+
       - name: Build release
         if: github.ref_type == 'tag'
         env:

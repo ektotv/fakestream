@@ -18,6 +18,7 @@ options:
   --port PORT   port to listen on (default: 8080)
   --quiet       drop the progress bar, keeping one line per fixture
   --verbose     let ffmpeg log everything, for diagnosing a bad file
+  --licenses    print the licences of everything in the binary
   -v, --version print the version, commit and build date
 ";
 
@@ -37,6 +38,14 @@ fn main() {
         .any(|argument| argument == "-h" || argument == "--help")
     {
         print!("{USAGE}");
+        return;
+    }
+    if arguments.iter().any(|argument| argument == "--licenses") {
+        // Ignoring the result: this output exists to be piped into head or
+        // less, and a reader closing the pipe early is their choice rather
+        // than our failure. print! would panic on it.
+        use std::io::Write;
+        let _ = std::io::stdout().write_all(licenses_text().as_bytes());
         return;
     }
 
@@ -172,6 +181,48 @@ fn version_line() -> String {
     )
 }
 
+/// Everything the binary carries and the licence each part arrived under.
+///
+/// The binary is self contained, so it is also the only place a user can be
+/// relied on to still have; the licences travel inside it rather than in
+/// files beside it. All embedded at compile time, so the flag works offline.
+fn licenses_text() -> String {
+    format!(
+        "\
+fakestream is licensed GPL-3.0-or-later, and statically links ffmpeg built
+under the GPL with version 3 upgrades enabled, so the combined work is
+distributed under the GPL-3.0 text below.
+
+It also carries: x264 (GPL-2.0-or-later, section below), the libcaption
+library (MIT, section below), the Noto Sans font (SIL OFL 1.1, section
+below), and the Rust crates listed at the end, each under its own licence.
+
+--------------------------------------------------------------------------------
+fakestream and ffmpeg
+
+{}
+--------------------------------------------------------------------------------
+x264, GPL-2.0-or-later
+
+{}
+--------------------------------------------------------------------------------
+libcaption, MIT
+https://github.com/szatmary/libcaption
+
+{}
+--------------------------------------------------------------------------------
+Noto Sans, SIL Open Font License 1.1
+
+{}
+{}",
+        include_str!("../LICENSE"),
+        include_str!("../third_party/licenses/GPL-2.0.txt"),
+        include_str!("../third_party/libcaption/LICENSE.txt"),
+        include_str!("../assets/fonts/OFL.txt"),
+        include_str!("../THIRD_PARTY_LICENSES"),
+    )
+}
+
 fn fail(message: &str) -> ! {
     eprintln!("{message}");
     std::process::exit(1);
@@ -222,6 +273,25 @@ mod tests {
         let (_, flags) = command_and_flags(&raw);
 
         assert!(Options::parse(flags).is_err());
+    }
+
+    #[test]
+    fn the_licences_cover_everything_in_the_binary() {
+        let text = licenses_text();
+
+        // Our own licence, which also covers the statically linked ffmpeg.
+        assert!(text.contains("GNU GENERAL PUBLIC LICENSE"));
+        assert!(text.contains("Version 3"));
+        // x264 is GPL-2.0-or-later, carried as its own section.
+        assert!(text.contains("Version 2, June 1991"));
+        // The vendored caption library.
+        assert!(text.contains("libcaption"));
+        // The embedded font.
+        assert!(text.contains("SIL OPEN FONT LICENSE"));
+        // A crate that will be in the dependency tree as long as the tool
+        // serves HTTP, standing in for the generated attributions being
+        // present at all.
+        assert!(text.contains("axum"));
     }
 
     #[test]
