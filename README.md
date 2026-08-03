@@ -32,42 +32,45 @@ the tool itself. Caption text is generated lorem ipsum.
 Each release ships a self-contained binary per platform, with ffmpeg and x264
 built in. Nothing else needs installing.
 
-Download the archive for your platform from the
-[latest release](https://github.com/ektotv/fakestream/releases/latest), then:
-
-### macOS (Apple Silicon)
+### macOS (Apple Silicon) and Linux (x86_64)
 
 ```sh
-tar xzf fakestream-v*-macos-arm64.tar.gz
-cd fakestream-v*-macos-arm64
-./fakestream
+curl -fsSL https://raw.githubusercontent.com/ektotv/fakestream/main/scripts/install.sh | sh
 ```
 
-The binary is not signed or notarised. Downloads made with a browser carry a
-quarantine flag that blocks it with "cannot be opened"; either allow it under
-System Settings, Privacy & Security, or clear the flag:
+The script detects the platform, downloads the latest release, checks it
+against the release's `SHA256SUMS`, and unpacks it into the current directory.
+It never writes outside that directory; putting the binary on your PATH is a
+separate step it prints and leaves to you:
+
+```sh
+sudo install fakestream-v*/fakestream /usr/local/bin/
+```
+
+### Windows (x86_64)
+
+```bat
+curl -fsSL -o install.bat https://raw.githubusercontent.com/ektotv/fakestream/main/scripts/install.bat && install.bat
+```
+
+### Manually
+
+Download the archive for your platform from the
+[latest release](https://github.com/ektotv/fakestream/releases/latest), check
+it against the release's `SHA256SUMS`, unpack it, and run the binary inside.
+
+On macOS the binary is not signed or notarised. Downloads made with a browser
+carry a quarantine flag that blocks it with "cannot be opened"; either allow
+it under System Settings, Privacy & Security, or clear the flag:
 
 ```sh
 xattr -d com.apple.quarantine fakestream
 ```
 
-Downloads made with `curl` carry no flag and run as they are.
+Downloads made with `curl`, including the install script above, carry no flag
+and run as they are.
 
-### Linux (x86_64)
-
-```sh
-tar xzf fakestream-v*-linux-x86_64.tar.gz
-cd fakestream-v*-linux-x86_64
-./fakestream
-```
-
-### Windows (x86_64)
-
-Extract the zip and run `fakestream.exe` from a terminal in the extracted
-folder.
-
-Each release also carries a `SHA256SUMS` file covering all three archives, and
-every binary reports exactly what it is:
+Whichever way it arrived, every binary reports exactly what it is:
 
 ```
 $ fakestream --version
