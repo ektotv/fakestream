@@ -120,6 +120,21 @@ impl LiveHls {
 
         wait_until_ready(&playlist, &directory, extension).await
     }
+
+    /// Record activity on a stream if it is running.
+    ///
+    /// Only the master playlist carries the fixture route, so requests for the
+    /// variant playlists and segments beside it arrive here instead. Missing
+    /// them was fatal: a player fetches the master once and then polls only
+    /// those files, so the writer thought nobody was watching and stopped
+    /// about a minute in.
+    pub fn touch(&self, id: &str) {
+        if let Ok(running) = self.running.lock()
+            && let Some(stream) = running.get(id)
+        {
+            stream.touch();
+        }
+    }
 }
 
 /// Is there a playlist, and enough behind it to start playing?
@@ -198,6 +213,9 @@ fn run_writer(
             .as_secs()
             .saturating_sub(last_request.load(Ordering::Relaxed));
         if idle > IDLE_TIMEOUT.as_secs() {
+            // Said out loud because a silent stop looks identical to a bug
+            // from the player's side, a playlist that simply stops moving.
+            eprintln!("live hls stopped: nobody watching");
             return Ok(());
         }
     }
@@ -281,5 +299,29 @@ mod tests {
     #[test]
     fn a_missing_directory_reports_nothing_rather_than_failing() {
         assert_eq!(finished_segments(Path::new("nowhere-at-all"), "ts"), 0);
+    }
+
+    #[test]
+    fn a_touch_reaches_the_running_stream() {
+        let supervisor = LiveHls::default();
+        // A sentinel no elapsed-seconds reading could produce, so the store is
+        // observable.
+        let last_request = Arc::new(AtomicU64::new(u64::MAX));
+        supervisor.running.lock().expect("lock").insert(
+            "live-hls".to_string(),
+            Running {
+                last_request: Arc::clone(&last_request),
+                started: Instant::now(),
+            },
+        );
+
+        supervisor.touch("live-hls");
+
+        assert_ne!(last_request.load(Ordering::Relaxed), u64::MAX);
+    }
+
+    #[test]
+    fn touching_a_stream_that_is_not_running_is_harmless() {
+        LiveHls::default().touch("nothing-here");
     }
 }

@@ -193,6 +193,12 @@ async fn on_demand(State(state): State<Fixtures>, request: Request) -> Response 
             )
                 .into_response();
         }
+    } else if let Some(fixture) = live_fixture_owning(&catalogue(), &path) {
+        // A player fetches the master playlist once and then polls only the
+        // variant playlists and segments beside it, which carry no fixture
+        // route of their own. They must still count as watching, or the
+        // writer decides nobody is and stops the stream a minute in.
+        state.streams.touch(fixture.id);
     }
 
     // Segments and playlists inside an HLS directory land here too, and by the
@@ -205,6 +211,24 @@ async fn on_demand(State(state): State<Fixtures>, request: Request) -> Response 
         )
             .into_response(),
     }
+}
+
+/// The live HLS fixture whose directory contains this request path, if any.
+///
+/// A live stream is one fixture but many files. Only the master playlist
+/// carries the fixture's route; the variant playlists and segments live beside
+/// it and belong to the same stream.
+fn live_fixture_owning<'a>(fixtures: &'a [Fixture], path: &str) -> Option<&'a Fixture> {
+    fixtures.iter().find(|fixture| {
+        fixture.delivery == Delivery::LiveHls
+            && fixture
+                .route
+                .rsplit_once('/')
+                .is_some_and(|(directory, _)| {
+                    path.strip_prefix(directory)
+                        .is_some_and(|rest| rest.starts_with('/'))
+                })
+    })
 }
 
 /// Mirror a generation report into the state the index page reads.
@@ -233,4 +257,30 @@ async fn index_page(fixtures: Vec<Fixture>, base: String, progress: Progress) ->
         .map(|guard| guard.clone())
         .unwrap_or_default();
     Html(index::render(&fixtures, &base, &readiness))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn variant_and_segment_requests_belong_to_the_live_stream() {
+        // These are the requests a player actually keeps making, so they are
+        // the ones that must register as watching.
+        let fixtures = catalogue();
+
+        let variant = live_fixture_owning(&fixtures, "live/hls/stream0.m3u8").expect("variant");
+        assert_eq!(variant.delivery, Delivery::LiveHls);
+
+        assert!(live_fixture_owning(&fixtures, "live/hls/segment0-00042.ts").is_some());
+    }
+
+    #[test]
+    fn paths_outside_the_stream_directory_own_nothing() {
+        let fixtures = catalogue();
+
+        assert!(live_fixture_owning(&fixtures, "vod/basic.mp4").is_none());
+        // A sibling directory sharing the prefix as a string is not inside it.
+        assert!(live_fixture_owning(&fixtures, "live/hlsx/stream0.m3u8").is_none());
+    }
 }
