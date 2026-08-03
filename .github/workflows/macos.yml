@@ -1,29 +1,31 @@
-name: ci
+name: macos
 
 on:
   push:
     branches: [main]
   pull_request:
 
+# A new push replaces the answer the previous run was computing, so the old
+# run is cancelled rather than left burning a runner.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  linux:
-    runs-on: ubuntu-latest
+  macos:
+    # macos-latest is Apple Silicon, so this builds the arm64 binary. There is
+    # no install step: x264's arm64 assembly goes through clang rather than
+    # nasm, and the runner image ships pkg-config.
+    runs-on: macos-latest
 
     steps:
       # Actions are pinned to a commit rather than a tag, since a tag can be
       # moved to point at different code. The version alongside is what that
       # commit was released as.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install build tools
-        # nasm is for x264's assembly, and pkg-config is how the ffmpeg build
-        # and rusty_ffmpeg find each other.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y nasm pkg-config
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
@@ -40,8 +42,9 @@ jobs:
         with:
           path: third_party/ffmpeg
           # Keyed on the script, so changing a configure flag rebuilds and
-          # nothing else does. Without this every run pays the whole build.
-          key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+          # nothing else does. The arch is in the key so an Intel job added
+          # later cannot collide with the arm64 cache.
+          key: ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-ffmpeg.sh') }}
 
       - name: Build static ffmpeg
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
@@ -69,11 +72,11 @@ jobs:
         # The point of the static build is that it needs nothing installed, so
         # a linked ffmpeg here means the build quietly fell back to a system one.
         run: |
-          if ldd target/release/fakestream | grep -E 'libav|libsw|libx264'; then
+          if otool -L target/release/fakestream | grep -E 'libav|libsw|libx264'; then
             echo "the binary links ffmpeg rather than carrying it" >&2
             exit 1
           fi
-          ldd target/release/fakestream
+          otool -L target/release/fakestream
 
       - name: Smoke test
         # Generating one fixture exercises the encoders, the muxer and the
@@ -86,5 +89,5 @@ jobs:
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: fakestream-linux-x86_64
+          name: fakestream-macos-arm64
           path: target/release/fakestream

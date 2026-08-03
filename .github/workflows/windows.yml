@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# A new push replaces the answer the previous run was computing, so the old
+# run is cancelled rather than left burning a runner.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
