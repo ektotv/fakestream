@@ -13,12 +13,17 @@ on:
   pull_request:
     # Documentation cannot break a build, so a PR touching only these files
     # skips the platform jobs. An ignore list rather than an allow list, so a
-    # newly added source path cannot be forgotten into silence.
+    # newly added source path cannot be forgotten into silence. The install
+    # scripts are served from the head of main rather than built into
+    # anything, so they are documentation as far as this workflow cares;
+    # build-ffmpeg.sh stays unlisted deliberately, it shapes every binary.
     paths-ignore:
       - "**.md"
       - "docs/**"
       - "LICENSE"
       - "release.toml"
+      - "scripts/install.sh"
+      - "scripts/install.bat"
 
 # A new push replaces the answer the previous run was computing, so the old
 # run is cancelled rather than left burning a runner.
