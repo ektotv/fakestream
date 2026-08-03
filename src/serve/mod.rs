@@ -6,17 +6,22 @@ mod demand;
 mod index;
 mod live;
 mod live_hls;
+mod log;
 
 use crate::fixtures::{Delivery, Fixture, catalogue};
+use crate::progress::Bar;
 use axum::Router;
-use axum::extract::{Request, State};
+use axum::extract::{ConnectInfo, Request, State};
+use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use demand::Demand;
+use log::RequestLog;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tower::ServiceExt;
 use tower_http::services::ServeDir;
 
@@ -92,7 +97,9 @@ pub async fn run(
 ) -> Result<(), ServeError> {
     let fixtures = catalogue();
     let base = format!("http://{address}");
-    let demand = Demand::new(root.clone(), quiet);
+    let bar = Arc::new(Mutex::new(Bar::new(quiet)));
+    let demand = Demand::new(root.clone(), Arc::clone(&bar));
+    let requests = RequestLog::new(bar);
     let streams = live_hls::LiveHls::new();
 
     let progress_for_handler = Arc::clone(&progress);
@@ -120,14 +127,54 @@ pub async fn run(
 
     // Everything else falls through here, which is where a fixture is
     // generated if this is the first time anyone has asked for it.
-    let app = app.fallback(axum::routing::any(on_demand).with_state(Fixtures {
-        demand,
-        streams,
-        progress: progress_for_handler,
-        root,
-    }));
+    let app = app
+        .fallback(axum::routing::any(on_demand).with_state(Fixtures {
+            demand,
+            streams,
+            progress: progress_for_handler,
+            root,
+        }))
+        // Layered over the finished router so every request logs, including
+        // the live routes and files served straight from disk.
+        .layer(middleware::from_fn_with_state(requests, log_requests));
 
-    axum::serve(listener, app).await.map_err(ServeError::Io)
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .map_err(ServeError::Io)
+}
+
+/// Log one line per request, timestamped, once the response is decided.
+///
+/// The elapsed figure is the time to produce the response, not to stream its
+/// body, so a first-time fixture generation shows in the tens of seconds while
+/// an endless live stream still logs the moment it starts.
+async fn log_requests(
+    State(log): State<Arc<RequestLog>>,
+    ConnectInfo(client): ConnectInfo<SocketAddr>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let method = request.method().to_string();
+    let path = request
+        .uri()
+        .path_and_query()
+        .map(|full| full.to_string())
+        .unwrap_or_else(|| request.uri().path().to_string());
+
+    let started = Instant::now();
+    let response = next.run(request).await;
+
+    log.record(
+        client,
+        &method,
+        response.status().as_u16(),
+        &path,
+        started.elapsed().as_millis(),
+    );
+    response
 }
 
 /// Take the port before anything else happens.
@@ -163,8 +210,6 @@ async fn on_demand(State(state): State<Fixtures>, request: Request) -> Response 
         .into_iter()
         .find(|fixture| fixture.route == path)
     {
-        state.demand.log_request(&path);
-
         let outcome = match fixture.delivery {
             Delivery::Vod => state.demand.ensure_built(&fixture, &state.progress).await,
             Delivery::LiveHls => match &fixture.hls {

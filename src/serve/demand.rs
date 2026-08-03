@@ -24,20 +24,14 @@ pub struct Demand {
 }
 
 impl Demand {
-    pub fn new(root: PathBuf, quiet: bool) -> Arc<Self> {
+    /// The bar is handed in rather than created here, since the request log
+    /// prints to the same terminal and both must interrupt the same bar.
+    pub fn new(root: PathBuf, bar: Arc<Mutex<Bar>>) -> Arc<Self> {
         Arc::new(Self {
             root,
             locks: Mutex::new(HashMap::new()),
-            bar: Arc::new(Mutex::new(Bar::new(quiet))),
+            bar,
         })
-    }
-
-    /// Note a request in the log, before any work starts.
-    pub fn log_request(&self, path: &str) {
-        if let Ok(mut bar) = self.bar.lock() {
-            bar.interrupt();
-        }
-        println!("  request  /{path}");
     }
 
     /// The lock covering one fixture.
