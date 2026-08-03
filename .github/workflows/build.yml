@@ -11,6 +11,14 @@ on:
   push:
     tags: ["v*"]
   pull_request:
+    # Documentation cannot break a build, so a PR touching only these files
+    # skips the platform jobs. An ignore list rather than an allow list, so a
+    # newly added source path cannot be forgotten into silence.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - "release.toml"
 
 # A new push replaces the answer the previous run was computing, so the old
 # run is cancelled rather than left burning a runner.
