@@ -63,35 +63,74 @@ fn main() {
     link_windows_dependencies();
 }
 
-/// Name the libraries ffmpeg needs on Windows, when pkg-config is not in play.
+/// Name the libraries ffmpeg needs, on the route that does not use pkg-config.
 ///
 /// Everywhere else pkg-config names these. On Windows rusty_ffmpeg has no
-/// pkg-config support at all, it is compiled out, so it is pointed at a library
-/// directory instead and links ffmpeg's own libraries and nothing else. Without
-/// these the build fails with a wall of unresolved symbols naming Windows APIs
-/// rather than anything in this project.
+/// pkg-config support at all, it is compiled out behind a cfg, so it is pointed
+/// at a library directory instead and links ffmpeg's own libraries and nothing
+/// else. Everything they in turn depend on is ours to name.
+///
+/// Rather than keep a hand-written list, which was wrong twice, this reads
+/// ffmpeg's own pkg-config files. They are written by the build we just ran, so
+/// they stay correct as its dependencies change.
 fn link_windows_dependencies() {
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
 
-    // Only for the library-directory route. With pkg-config these come from
-    // ffmpeg's own .pc files, which stay correct as its dependencies change.
     let Some(libs) = env::var_os("FFMPEG_LIBS_DIR") else {
         return;
     };
+    let libs = Path::new(&libs);
 
-    println!(
-        "cargo:rustc-link-search=native={}",
-        Path::new(&libs).display()
-    );
-    println!("cargo:rustc-link-lib=static=x264");
+    println!("cargo:rustc-link-search=native={}", libs.display());
 
-    // Taken from ffmpeg's configure.
-    for library in [
-        "advapi32", "bcrypt", "gdi32", "mfplat", "mfuuid", "ole32", "oleaut32", "psapi", "secur32",
-        "shlwapi", "strmiids", "user32", "uuid", "vfw32", "ws2_32",
-    ] {
-        println!("cargo:rustc-link-lib={library}");
+    let mut named = Vec::new();
+    let mut searched = Vec::new();
+
+    for entry in fs::read_dir(libs.join("pkgconfig"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("pc") {
+            continue;
+        }
+        let Ok(contents) = fs::read_to_string(&path) else {
+            continue;
+        };
+
+        for line in contents.lines() {
+            let Some(flags) = line
+                .strip_prefix("Libs:")
+                .or_else(|| line.strip_prefix("Libs.private:"))
+            else {
+                continue;
+            };
+
+            for flag in flags.split_whitespace() {
+                if let Some(name) = flag.strip_prefix("-l") {
+                    // ffmpeg's own libraries are linked by rusty_ffmpeg.
+                    if !name.starts_with("av")
+                        && !name.starts_with("sw")
+                        && !named.iter().any(|seen| seen == name)
+                    {
+                        named.push(name.to_string());
+                    }
+                } else if let Some(dir) = flag.strip_prefix("-L") {
+                    if !dir.contains("${") && !searched.iter().any(|seen| seen == dir) {
+                        searched.push(dir.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    for dir in searched {
+        println!("cargo:rustc-link-search=native={dir}");
+    }
+    for name in named {
+        println!("cargo:rustc-link-lib={name}");
     }
 }
