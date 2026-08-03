@@ -67,7 +67,11 @@ fi
 
 if [ ! -d "ffmpeg-$VERSION" ]; then
   echo "fetching ffmpeg $VERSION"
-  curl -fsSL -o "ffmpeg-$VERSION.tar.xz" "https://ffmpeg.org/releases/ffmpeg-$VERSION.tar.xz"
+  # Retried because in CI this download runs on every attempt until the job
+  # first succeeds, and one reset connection otherwise wastes the whole run.
+  # --retry alone does not cover a mid-transfer reset, hence --retry-all-errors.
+  curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+    -o "ffmpeg-$VERSION.tar.xz" "https://ffmpeg.org/releases/ffmpeg-$VERSION.tar.xz"
   tar xf "ffmpeg-$VERSION.tar.xz"
 fi
 
