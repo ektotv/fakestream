@@ -23,9 +23,8 @@ options:
 
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
-    let command = arguments.first().map(String::as_str).unwrap_or("serve");
 
-    // Before option parsing, so `fakestream serve --version` is not an error.
+    // Before option parsing, so these work wherever they appear.
     if arguments
         .iter()
         .any(|argument| argument == "-v" || argument == "--version")
@@ -33,8 +32,17 @@ fn main() {
         println!("{}", version_line());
         return;
     }
+    if arguments
+        .iter()
+        .any(|argument| argument == "-h" || argument == "--help")
+    {
+        print!("{USAGE}");
+        return;
+    }
 
-    let options = match Options::parse(&arguments) {
+    let (command, flags) = command_and_flags(&arguments);
+
+    let options = match Options::parse(flags) {
         Ok(options) => options,
         Err(message) => fail(&message),
     };
@@ -48,8 +56,19 @@ fn main() {
     match command {
         "build" => build(&options.dir, options.quiet),
         "serve" => serve(options),
-        "help" | "--help" | "-h" => print!("{USAGE}"),
+        "help" => print!("{USAGE}"),
         other => fail(&format!("unknown command {other}\n\n{USAGE}")),
+    }
+}
+
+/// Split the arguments into the command and its flags.
+///
+/// The command is optional and defaults to serve, so `fakestream --port 9872`
+/// works. A leading dash means the flags started without one.
+fn command_and_flags(arguments: &[String]) -> (&str, &[String]) {
+    match arguments.first() {
+        Some(first) if !first.starts_with('-') => (first.as_str(), &arguments[1..]),
+        _ => ("serve", arguments),
     }
 }
 
@@ -61,13 +80,14 @@ struct Options {
 }
 
 impl Options {
+    /// Parse flags, the part of the arguments after any command.
     fn parse(arguments: &[String]) -> Result<Self, String> {
         let mut dir = PathBuf::from("fixtures");
         let mut port = 8080u16;
         let mut quiet = false;
         let mut verbose = false;
 
-        let mut rest = arguments.iter().skip(1);
+        let mut rest = arguments.iter();
         while let Some(flag) = rest.next() {
             match flag.as_str() {
                 "--dir" => {
@@ -160,6 +180,49 @@ fn fail(message: &str) -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn arguments(raw: &[&str]) -> Vec<String> {
+        raw.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn flags_without_a_command_mean_serve() {
+        let raw = arguments(&["--port", "9872"]);
+        let (command, flags) = command_and_flags(&raw);
+
+        assert_eq!(command, "serve");
+        let options = Options::parse(flags).expect("--port 9872 parses");
+        assert_eq!(options.port, 9872);
+    }
+
+    #[test]
+    fn a_command_with_flags_still_works() {
+        let raw = arguments(&["serve", "--port", "9000", "--quiet"]);
+        let (command, flags) = command_and_flags(&raw);
+
+        assert_eq!(command, "serve");
+        let options = Options::parse(flags).expect("flags after a command parse");
+        assert_eq!(options.port, 9000);
+        assert!(options.quiet);
+    }
+
+    #[test]
+    fn no_arguments_at_all_mean_serve_with_defaults() {
+        let raw = arguments(&[]);
+        let (command, flags) = command_and_flags(&raw);
+
+        assert_eq!(command, "serve");
+        let options = Options::parse(flags).expect("empty parses");
+        assert_eq!(options.port, 8080);
+    }
+
+    #[test]
+    fn an_unknown_option_is_still_refused() {
+        let raw = arguments(&["serve", "--nope"]);
+        let (_, flags) = command_and_flags(&raw);
+
+        assert!(Options::parse(flags).is_err());
+    }
 
     #[test]
     fn the_version_line_opens_with_the_semver() {
