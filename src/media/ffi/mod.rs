@@ -21,6 +21,48 @@ pub use subtitle::{
     set_subtitle_header, text_subtitle,
 };
 
+/// A stream or encoder time base: the tick that timestamps are counted in.
+///
+/// A newtype so the raw ffmpeg rational stays inside this module rather than
+/// crossing into the muxers, which is where the "no ffmpeg types escape" rule
+/// was leaking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeBase {
+    num: i32,
+    den: i32,
+}
+
+impl TimeBase {
+    /// A time base of `num/den` seconds per tick.
+    pub fn new(num: i32, den: i32) -> Self {
+        Self { num, den }
+    }
+
+    /// Read a time base back off a stream ffmpeg configured.
+    pub(crate) fn from_raw(raw: rsmpeg::ffi::AVRational) -> Self {
+        Self {
+            num: raw.num,
+            den: raw.den,
+        }
+    }
+
+    /// The raw rational, for handing to an ffmpeg call.
+    pub(crate) fn raw(self) -> rsmpeg::ffi::AVRational {
+        rsmpeg::ffi::AVRational {
+            num: self.num,
+            den: self.den,
+        }
+    }
+}
+
+/// The short name of a codec, for example `h264` or `aac`.
+pub fn codec_name(id: rsmpeg::ffi::AVCodecID) -> String {
+    // SAFETY: avcodec_get_name always returns a valid static C string, even for
+    // an unknown id, where it yields "none".
+    let name = unsafe { std::ffi::CStr::from_ptr(rsmpeg::ffi::avcodec_get_name(id)) };
+    name.to_string_lossy().into_owned()
+}
+
 /// Anything that can go wrong at the FFI boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FfiError {

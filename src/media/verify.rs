@@ -57,7 +57,7 @@ pub fn inspect(path: &CStr) -> Result<Vec<StreamSummary>, MediaError> {
 
             StreamSummary {
                 kind: StreamKind::from(parameters.codec_type),
-                codec: codec_name(parameters.codec_id),
+                codec: ffi::codec_name(parameters.codec_id),
                 width: parameters.width,
                 height: parameters.height,
                 sample_rate: parameters.sample_rate,
@@ -68,13 +68,6 @@ pub fn inspect(path: &CStr) -> Result<Vec<StreamSummary>, MediaError> {
         .collect();
 
     Ok(summaries)
-}
-
-fn codec_name(id: sys::AVCodecID) -> String {
-    // SAFETY: avcodec_get_name always returns a valid static C string, even for
-    // an unknown id, where it yields "none".
-    let name = unsafe { std::ffi::CStr::from_ptr(sys::avcodec_get_name(id)) };
-    name.to_string_lossy().into_owned()
 }
 
 /// One decoded subtitle event, for checking that captions both appear and go

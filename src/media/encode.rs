@@ -41,7 +41,7 @@ pub(crate) fn open_video_encoder(
     encoder.set_width(spec.width);
     encoder.set_height(spec.height);
     encoder.set_pix_fmt(sys::AV_PIX_FMT_YUV420P);
-    encoder.set_time_base(spec.video_time_base());
+    encoder.set_time_base(spec.video_time_base().raw());
     encoder.set_framerate(sys::AVRational {
         num: spec.fps,
         den: 1,
@@ -70,7 +70,7 @@ pub(crate) fn open_audio_encoder(
     encoder.set_sample_rate(spec.sample_rate);
     encoder.set_ch_layout(AVChannelLayout::from_nb_channels(spec.channels as i32).into_inner());
     encoder.set_sample_fmt(sys::AV_SAMPLE_FMT_FLTP);
-    encoder.set_time_base(spec.audio_time_base());
+    encoder.set_time_base(spec.audio_time_base().raw());
     if policy.global_header {
         encoder.set_flags(encoder.flags | sys::AV_CODEC_FLAG_GLOBAL_HEADER as i32);
     }
@@ -89,12 +89,12 @@ pub(crate) fn add_av_streams(
     {
         let mut stream = output.new_stream();
         stream.set_codecpar(video.extract_codecpar());
-        stream.set_time_base(spec.video_time_base());
+        stream.set_time_base(spec.video_time_base().raw());
     }
     {
         let mut stream = output.new_stream();
         stream.set_codecpar(audio.extract_codecpar());
-        stream.set_time_base(spec.audio_time_base());
+        stream.set_time_base(spec.audio_time_base().raw());
     }
 }
 
@@ -104,8 +104,8 @@ pub(crate) fn drain(
     encoder: &mut AVCodecContext,
     output: &mut AVFormatContextOutput,
     stream_index: i32,
-    encoder_tb: sys::AVRational,
-    stream_tb: sys::AVRational,
+    encoder_tb: ffi::TimeBase,
+    stream_tb: ffi::TimeBase,
 ) -> Result<(), MediaError> {
     while let Ok(mut packet) = encoder.receive_packet() {
         ffi::route(&mut packet, stream_index);

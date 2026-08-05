@@ -1,6 +1,6 @@
 //! Packet construction and timestamp handling.
 
-use super::FfiError;
+use super::{FfiError, TimeBase};
 use rsmpeg::avcodec::AVPacket;
 use rsmpeg::ffi;
 
@@ -50,9 +50,9 @@ pub fn stamp(packet: &mut AVPacket, stream_index: i32, pts: i64, duration: i64) 
 /// Necessary because `write_header` may replace the time base you asked for.
 /// MPEG-TS always does, forcing 90kHz, and timestamps left in another base are
 /// then misread rather than rejected.
-pub fn rescale(packet: &mut AVPacket, from: ffi::AVRational, to: ffi::AVRational) {
+pub fn rescale(packet: &mut AVPacket, from: TimeBase, to: TimeBase) {
     // SAFETY: ffmpeg's own arithmetic over a packet this process owns.
     unsafe {
-        ffi::av_packet_rescale_ts(packet.as_mut_ptr(), from, to);
+        ffi::av_packet_rescale_ts(packet.as_mut_ptr(), from.raw(), to.raw());
     }
 }
