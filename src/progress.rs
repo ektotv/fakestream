@@ -70,16 +70,7 @@ impl Bar {
     }
 
     fn redraw(&mut self, route: &str, fraction: f64) {
-        let filled = ((fraction * BAR_WIDTH as f64).round() as usize).min(BAR_WIDTH);
-        let bar: String = "=".repeat(filled) + &" ".repeat(BAR_WIDTH - filled);
-        let percent = (fraction * 100.0).round() as u32;
-
-        let counter = match self.position {
-            Some((index, total)) => format!("[{index}/{total}] "),
-            None => String::new(),
-        };
-
-        print!("\r{counter}[{bar}] {percent:>3}%  {route}");
+        print!("\r{}", render(self.position, route, fraction));
         let _ = std::io::stdout().flush();
         self.line_open = true;
     }
@@ -99,5 +90,66 @@ impl Bar {
             let _ = std::io::stdout().flush();
             self.line_open = false;
         }
+    }
+}
+
+/// Compose the moving line: an optional `[i/total]` counter, the fill bar, the
+/// percent, and the route.
+///
+/// Pure, so the fill, rounding and counter can be asserted without a terminal,
+/// which is the whole reason it is split out of [`Bar::redraw`].
+fn render(position: Option<(usize, usize)>, route: &str, fraction: f64) -> String {
+    let filled = ((fraction * BAR_WIDTH as f64).round() as usize).min(BAR_WIDTH);
+    let bar: String = "=".repeat(filled) + &" ".repeat(BAR_WIDTH - filled);
+    let percent = (fraction * 100.0).round() as u32;
+
+    let counter = match position {
+        Some((index, total)) => format!("[{index}/{total}] "),
+        None => String::new(),
+    };
+
+    format!("{counter}[{bar}] {percent:>3}%  {route}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_empty_bar_at_the_start() {
+        let line = render(None, "vod/basic.mp4", 0.0);
+        assert_eq!(
+            line,
+            format!("[{}] {:>3}%  vod/basic.mp4", " ".repeat(24), 0)
+        );
+    }
+
+    #[test]
+    fn a_half_filled_bar() {
+        let line = render(None, "x", 0.5);
+        assert_eq!(
+            line,
+            format!("[{}{}]  50%  x", "=".repeat(12), " ".repeat(12))
+        );
+    }
+
+    #[test]
+    fn a_full_bar_reads_one_hundred_percent() {
+        let line = render(None, "x", 1.0);
+        assert_eq!(line, format!("[{}] 100%  x", "=".repeat(24)));
+    }
+
+    #[test]
+    fn the_counter_shows_the_position() {
+        let line = render(Some((2, 5)), "x", 0.0);
+        assert!(line.starts_with("[2/5] ["), "counter missing: {line}");
+    }
+
+    #[test]
+    fn the_fill_never_overruns_the_bar() {
+        // A fraction past one, which a slow reporter can produce, must not draw
+        // more than the bar's width of fill.
+        let line = render(None, "x", 1.5);
+        assert_eq!(line.matches('=').count(), 24);
     }
 }
