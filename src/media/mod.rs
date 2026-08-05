@@ -2,6 +2,7 @@
 //! itself is confined further, to `media::ffi`.
 
 pub mod clock;
+pub mod encode;
 pub mod ffi;
 pub mod hls;
 pub mod live;

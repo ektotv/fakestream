@@ -13,14 +13,16 @@
 use super::hls::HlsOptions;
 use super::mux::ClipSpec;
 use super::pmt::PmtAnnouncer;
-use super::{MediaError, clock, context, ffi, overlay, source::Beeps, source::paint_pattern};
+use super::{
+    MediaError, clock, context, encode, ffi, overlay, source::Beeps, source::paint_pattern,
+};
 use crate::captions::feed::CaptionFeed;
-use rsmpeg::avcodec::{AVCodec, AVCodecContext};
+use rsmpeg::avcodec::AVCodecContext;
 use rsmpeg::avformat::AVIOContextContainer;
 use rsmpeg::avformat::{AVFormatContextOutput, AVIOContextCustom};
-use rsmpeg::avutil::{AVChannelLayout, AVDictionary, AVFrame, AVMem};
+use rsmpeg::avutil::{AVFrame, AVMem};
 use rsmpeg::ffi as sys;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -87,23 +89,20 @@ impl LiveStream {
             .map(|since| since.as_secs_f64())
             .unwrap_or(0.0);
 
-        let video = open_video_encoder(&spec)?;
-        let audio = open_audio_encoder(&spec)?;
+        // Live holds no B-frames, since a held-back frame is delay a viewer
+        // feels, and never emits a global header, since MPEG-TS carries codec
+        // configuration in-band.
+        let policy = encode::EncoderPolicy {
+            global_header: false,
+            cap_b_frames: true,
+        };
+        let video = encode::open_video_encoder(&spec, policy)?;
+        let audio = encode::open_audio_encoder(&spec, policy)?;
         let muxer = make_muxer(&spec, &video, &audio)?;
 
-        let mut picture = AVFrame::new();
-        picture.set_width(spec.width);
-        picture.set_height(spec.height);
-        picture.set_format(sys::AV_PIX_FMT_YUV420P);
-        context("allocating a live video frame", picture.alloc_buffer())?;
-
+        let picture = encode::new_video_frame(&spec)?;
         let samples_per_frame = audio.frame_size.max(1024);
-        let mut sound = AVFrame::new();
-        sound.set_nb_samples(samples_per_frame);
-        sound.set_ch_layout(AVChannelLayout::from_nb_channels(spec.channels as i32).into_inner());
-        sound.set_format(sys::AV_SAMPLE_FMT_FLTP);
-        sound.set_sample_rate(spec.sample_rate);
-        context("allocating a live audio frame", sound.alloc_buffer())?;
+        let sound = encode::new_audio_frame(&spec, samples_per_frame)?;
 
         let beeps = Beeps::every_second(spec.sample_rate as u32);
         // Captions come from the spec's plan, so the plain live streams carry
@@ -216,40 +215,6 @@ impl LiveStream {
     }
 }
 
-fn open_video_encoder(spec: &ClipSpec) -> Result<AVCodecContext, MediaError> {
-    let codec =
-        AVCodec::find_encoder_by_name(c"libx264").ok_or(MediaError::MissingCodec("libx264"))?;
-    let mut encoder = AVCodecContext::new(&codec);
-    encoder.set_width(spec.width);
-    encoder.set_height(spec.height);
-    encoder.set_pix_fmt(sys::AV_PIX_FMT_YUV420P);
-    encoder.set_time_base(spec.video_time_base());
-    encoder.set_framerate(sys::AVRational {
-        num: spec.fps,
-        den: 1,
-    });
-    encoder.set_bit_rate(spec.video_bitrate);
-    // A player joining or recovering waits at most this long for a picture,
-    // and for segmented delivery it also defines the segment boundary.
-    encoder.set_gop_size(spec.keyframe_interval());
-    // Latency matters more than compression here. B-frames make the encoder
-    // hold frames back, which shows up directly as delay on a live stream.
-    encoder.set_max_b_frames(0);
-    context("opening libx264 for live", encoder.open(None))?;
-    Ok(encoder)
-}
-
-fn open_audio_encoder(spec: &ClipSpec) -> Result<AVCodecContext, MediaError> {
-    let codec = AVCodec::find_encoder_by_name(c"aac").ok_or(MediaError::MissingCodec("aac"))?;
-    let mut encoder = AVCodecContext::new(&codec);
-    encoder.set_sample_rate(spec.sample_rate);
-    encoder.set_ch_layout(AVChannelLayout::from_nb_channels(spec.channels as i32).into_inner());
-    encoder.set_sample_fmt(sys::AV_SAMPLE_FMT_FLTP);
-    encoder.set_time_base(spec.audio_time_base());
-    context("opening aac for live", encoder.open(None))?;
-    Ok(encoder)
-}
-
 /// Where a live stream's packets go.
 ///
 /// Either into memory for one HTTP response, or onto disk as HLS segments for
@@ -284,17 +249,7 @@ impl LiveMuxer {
             .unwrap_or(Path::new("."))
             .to_path_buf();
 
-        let mut settings: Option<AVDictionary> = None;
-        for (key, value) in options.as_pairs(&spec.subtitles, &directory) {
-            let key = CString::new(key)
-                .map_err(|_| MediaError::Ffi(ffi::FfiError::Shape("bad option name")))?;
-            let value = CString::new(value)
-                .map_err(|_| MediaError::Ffi(ffi::FfiError::Shape("bad option value")))?;
-            settings = Some(match settings {
-                Some(existing) => existing.set(&key, &value, 0),
-                None => AVDictionary::new(&key, &value, 0),
-            });
-        }
+        let mut settings = encode::hls_settings(options, &spec.subtitles, &directory)?;
 
         let mut output = context(
             "creating the live hls muxer",
@@ -304,7 +259,7 @@ impl LiveMuxer {
                 .build(),
         )?;
 
-        Self::add_streams(&mut output, spec, video, audio);
+        encode::add_av_streams(&mut output, spec, video, audio);
         context(
             "writing the live hls header",
             output.write_header(&mut settings),
@@ -327,24 +282,6 @@ impl LiveMuxer {
             video_stream_tb,
             audio_stream_tb,
         })
-    }
-
-    fn add_streams(
-        output: &mut AVFormatContextOutput,
-        spec: &ClipSpec,
-        video: &AVCodecContext,
-        audio: &AVCodecContext,
-    ) {
-        {
-            let mut stream = output.new_stream();
-            stream.set_codecpar(video.extract_codecpar());
-            stream.set_time_base(spec.video_time_base());
-        }
-        {
-            let mut stream = output.new_stream();
-            stream.set_codecpar(audio.extract_codecpar());
-            stream.set_time_base(spec.audio_time_base());
-        }
     }
 
     fn memory_ts(
@@ -383,7 +320,7 @@ impl LiveMuxer {
                 .build(),
         )?;
 
-        Self::add_streams(&mut output, spec, video, audio);
+        encode::add_av_streams(&mut output, spec, video, audio);
 
         context("writing the live header", output.write_header(&mut None))?;
         // Otherwise the header sits in ffmpeg's buffer until enough media
@@ -423,14 +360,13 @@ impl LiveMuxer {
             self.audio_stream_tb
         };
 
-        while let Ok(mut packet) = encoder.receive_packet() {
-            ffi::route(&mut packet, stream_index);
-            ffi::rescale(&mut packet, encoder_tb, stream_tb);
-            context(
-                "writing a live packet",
-                self.output.interleaved_write_frame(&mut packet),
-            )?;
-        }
+        encode::drain(
+            encoder,
+            &mut self.output,
+            stream_index,
+            encoder_tb,
+            stream_tb,
+        )?;
 
         // Flush per drain rather than per buffer, since holding packets back to
         // fill a buffer is latency a live viewer feels directly.

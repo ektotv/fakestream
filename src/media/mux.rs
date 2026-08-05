@@ -2,14 +2,14 @@
 
 use super::hls::HlsOptions;
 use super::subtitles::SubtitleTrack;
-use super::{MediaError, context, ffi, source::Beeps, source::paint_pattern};
+use super::{MediaError, context, encode, ffi, source::Beeps, source::paint_pattern};
 use crate::captions::ass;
 use crate::captions::dvb::{self, Layout};
 use crate::captions::feed::{CaptionFeed, CaptionPlan};
 use crate::captions::script::Cue;
 use rsmpeg::avcodec::{AVCodec, AVCodecContext};
 use rsmpeg::avformat::AVFormatContextOutput;
-use rsmpeg::avutil::{AVChannelLayout, AVDictionary, AVFrame};
+use rsmpeg::avutil::AVDictionary;
 use rsmpeg::ffi as sys;
 use std::ffi::{CStr, CString};
 use std::path::Path;
@@ -165,18 +165,7 @@ fn open_output(
                 .unwrap_or(Path::new("."))
                 .to_path_buf();
 
-            let mut settings: Option<AVDictionary> = None;
-            for (key, value) in options.as_pairs(&spec.subtitles, &directory) {
-                let key = CString::new(key)
-                    .map_err(|_| MediaError::Ffi(ffi::FfiError::Shape("bad option name")))?;
-                let value = CString::new(value)
-                    .map_err(|_| MediaError::Ffi(ffi::FfiError::Shape("bad option value")))?;
-
-                settings = Some(match settings {
-                    Some(existing) => existing.set(&key, &value, 0),
-                    None => AVDictionary::new(&key, &value, 0),
-                });
-            }
+            let settings = encode::hls_settings(options, &spec.subtitles, &directory)?;
 
             let output = context(
                 "creating hls output",
@@ -208,19 +197,14 @@ pub fn write_clip_reporting(
     // opened or its extradata comes out in the wrong place.
     let global_header = output.oformat().flags & sys::AVFMT_GLOBALHEADER as i32 != 0;
 
-    let mut video = open_video_encoder(spec, global_header)?;
-    let mut audio = open_audio_encoder(spec, global_header)?;
+    let policy = encode::EncoderPolicy {
+        global_header,
+        cap_b_frames: false,
+    };
+    let mut video = encode::open_video_encoder(spec, policy)?;
+    let mut audio = encode::open_audio_encoder(spec, policy)?;
 
-    {
-        let mut stream = output.new_stream();
-        stream.set_codecpar(video.extract_codecpar());
-        stream.set_time_base(spec.video_time_base());
-    }
-    {
-        let mut stream = output.new_stream();
-        stream.set_codecpar(audio.extract_codecpar());
-        stream.set_time_base(spec.audio_time_base());
-    }
+    encode::add_av_streams(&mut output, spec, &video, &audio);
 
     let mut subtitle_encoders = Vec::with_capacity(spec.subtitles.len());
     for track in &spec.subtitles {
@@ -252,9 +236,9 @@ pub fn write_clip_reporting(
         .map(|index| output.streams()[FIRST_SUBTITLE_STREAM + index].time_base)
         .collect();
 
-    let mut picture = new_video_frame(spec)?;
+    let mut picture = encode::new_video_frame(spec)?;
     let samples_per_frame = audio.frame_size.max(1024);
-    let mut sound = new_audio_frame(spec, samples_per_frame)?;
+    let mut sound = encode::new_audio_frame(spec, samples_per_frame)?;
     let beeps = Beeps::every_second(spec.sample_rate as u32);
 
     let total_frames = spec.total_video_frames();
@@ -289,7 +273,7 @@ pub fn write_clip_reporting(
             )?;
             sound.set_pts(samples_written);
             context("encoding audio", audio.send_frame(Some(&sound)))?;
-            drain(
+            encode::drain(
                 &mut audio,
                 &mut output,
                 1,
@@ -334,7 +318,7 @@ pub fn write_clip_reporting(
         }
 
         context("encoding video", video.send_frame(Some(&picture)))?;
-        drain(
+        encode::drain(
             &mut video,
             &mut output,
             0,
@@ -344,7 +328,7 @@ pub fn write_clip_reporting(
     }
 
     context("flushing video", video.send_frame(None))?;
-    drain(
+    encode::drain(
         &mut video,
         &mut output,
         0,
@@ -352,7 +336,7 @@ pub fn write_clip_reporting(
         video_stream_tb,
     )?;
     context("flushing audio", audio.send_frame(None))?;
-    drain(
+    encode::drain(
         &mut audio,
         &mut output,
         1,
@@ -363,79 +347,6 @@ pub fn write_clip_reporting(
     context("writing trailer", output.write_trailer())?;
     progress(1.0);
     Ok(())
-}
-
-/// Pull every packet an encoder is ready to give and write it out.
-fn drain(
-    encoder: &mut AVCodecContext,
-    output: &mut AVFormatContextOutput,
-    stream_index: i32,
-    encoder_tb: sys::AVRational,
-    stream_tb: sys::AVRational,
-) -> Result<(), MediaError> {
-    while let Ok(mut packet) = encoder.receive_packet() {
-        ffi::route(&mut packet, stream_index);
-        ffi::rescale(&mut packet, encoder_tb, stream_tb);
-        context(
-            "writing packet",
-            output.interleaved_write_frame(&mut packet),
-        )?;
-    }
-    Ok(())
-}
-
-fn open_video_encoder(spec: &ClipSpec, global_header: bool) -> Result<AVCodecContext, MediaError> {
-    let codec =
-        AVCodec::find_encoder_by_name(c"libx264").ok_or(MediaError::MissingCodec("libx264"))?;
-    let mut encoder = AVCodecContext::new(&codec);
-    encoder.set_width(spec.width);
-    encoder.set_height(spec.height);
-    encoder.set_pix_fmt(sys::AV_PIX_FMT_YUV420P);
-    encoder.set_time_base(spec.video_time_base());
-    encoder.set_framerate(sys::AVRational {
-        num: spec.fps,
-        den: 1,
-    });
-    encoder.set_bit_rate(spec.video_bitrate);
-    encoder.set_gop_size(spec.keyframe_interval());
-    if global_header {
-        encoder.set_flags(encoder.flags | sys::AV_CODEC_FLAG_GLOBAL_HEADER as i32);
-    }
-    context("opening libx264", encoder.open(None))?;
-    Ok(encoder)
-}
-
-fn open_audio_encoder(spec: &ClipSpec, global_header: bool) -> Result<AVCodecContext, MediaError> {
-    let codec = AVCodec::find_encoder_by_name(c"aac").ok_or(MediaError::MissingCodec("aac"))?;
-    let mut encoder = AVCodecContext::new(&codec);
-    encoder.set_sample_rate(spec.sample_rate);
-    encoder.set_ch_layout(AVChannelLayout::from_nb_channels(spec.channels as i32).into_inner());
-    encoder.set_sample_fmt(sys::AV_SAMPLE_FMT_FLTP);
-    encoder.set_time_base(spec.audio_time_base());
-    if global_header {
-        encoder.set_flags(encoder.flags | sys::AV_CODEC_FLAG_GLOBAL_HEADER as i32);
-    }
-    context("opening aac", encoder.open(None))?;
-    Ok(encoder)
-}
-
-fn new_video_frame(spec: &ClipSpec) -> Result<AVFrame, MediaError> {
-    let mut frame = AVFrame::new();
-    frame.set_width(spec.width);
-    frame.set_height(spec.height);
-    frame.set_format(sys::AV_PIX_FMT_YUV420P);
-    context("allocating video frame", frame.alloc_buffer())?;
-    Ok(frame)
-}
-
-fn new_audio_frame(spec: &ClipSpec, samples: i32) -> Result<AVFrame, MediaError> {
-    let mut frame = AVFrame::new();
-    frame.set_nb_samples(samples);
-    frame.set_ch_layout(AVChannelLayout::from_nb_channels(spec.channels as i32).into_inner());
-    frame.set_format(sys::AV_SAMPLE_FMT_FLTP);
-    frame.set_sample_rate(spec.sample_rate);
-    context("allocating audio frame", frame.alloc_buffer())?;
-    Ok(frame)
 }
 
 /// One thing to put on a subtitle stream: a caption appearing, or the empty
