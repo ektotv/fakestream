@@ -2,6 +2,7 @@
 //! than from a fixed cue list. These tests drive a LiveStream directly, without
 //! real-time pacing, and read the muxed bytes back.
 
+use fakestream::captions::feed::CaptionPlan;
 use fakestream::captions::libcaption::Channel;
 use fakestream::media::live::LiveStream;
 use fakestream::media::mux::ClipSpec;
@@ -50,8 +51,10 @@ fn digital_service() -> CaptionService {
 #[test]
 fn a_captioned_live_stream_is_whole_transport_packets() {
     let spec = ClipSpec {
-        live_cea608: Some(Channel::One),
-        live_cea708: true,
+        captions: CaptionPlan::Rolling {
+            cea608: Some(Channel::One),
+            cea708: true,
+        },
         ..base()
     };
     let bytes = collect(spec, 50);
@@ -67,7 +70,10 @@ fn a_captioned_live_stream_is_whole_transport_packets() {
 #[test]
 fn an_announced_live_stream_carries_the_608_descriptor() {
     let spec = ClipSpec {
-        live_cea608: Some(Channel::One),
+        captions: CaptionPlan::Rolling {
+            cea608: Some(Channel::One),
+            cea708: false,
+        },
         announce_captions_in_pmt: true,
         ..base()
     };
@@ -85,8 +91,10 @@ fn an_announced_live_stream_carries_the_608_descriptor() {
 #[test]
 fn an_announced_live_stream_carries_608_and_708() {
     let spec = ClipSpec {
-        live_cea608: Some(Channel::One),
-        live_cea708: true,
+        captions: CaptionPlan::Rolling {
+            cea608: Some(Channel::One),
+            cea708: true,
+        },
         announce_captions_in_pmt: true,
         ..base()
     };

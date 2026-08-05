@@ -5,6 +5,7 @@
 mod cache;
 
 use crate::captions::cea608::ChannelCues;
+use crate::captions::feed::CaptionPlan;
 use crate::captions::libcaption::Channel;
 use crate::captions::script::{lorem_cues, offset_cues};
 use crate::media::MediaError;
@@ -135,7 +136,10 @@ pub fn catalogue() -> Vec<Fixture> {
             delivery: Delivery::Live,
             spec: ClipSpec {
                 duration_seconds: 0.0,
-                live_cea608: Some(Channel::One),
+                captions: CaptionPlan::Rolling {
+                    cea608: Some(Channel::One),
+                    cea708: false,
+                },
                 ..ClipSpec::default()
             },
             hls: None,
@@ -151,8 +155,10 @@ pub fn catalogue() -> Vec<Fixture> {
             delivery: Delivery::Live,
             spec: ClipSpec {
                 duration_seconds: 0.0,
-                live_cea608: Some(Channel::One),
-                live_cea708: true,
+                captions: CaptionPlan::Rolling {
+                    cea608: Some(Channel::One),
+                    cea708: true,
+                },
                 ..ClipSpec::default()
             },
             hls: None,
@@ -168,7 +174,10 @@ pub fn catalogue() -> Vec<Fixture> {
             delivery: Delivery::Live,
             spec: ClipSpec {
                 duration_seconds: 0.0,
-                live_cea608: Some(Channel::One),
+                captions: CaptionPlan::Rolling {
+                    cea608: Some(Channel::One),
+                    cea708: false,
+                },
                 announce_captions_in_pmt: true,
                 ..ClipSpec::default()
             },
@@ -185,8 +194,10 @@ pub fn catalogue() -> Vec<Fixture> {
             delivery: Delivery::Live,
             spec: ClipSpec {
                 duration_seconds: 0.0,
-                live_cea608: Some(Channel::One),
-                live_cea708: true,
+                captions: CaptionPlan::Rolling {
+                    cea608: Some(Channel::One),
+                    cea708: true,
+                },
                 announce_captions_in_pmt: true,
                 ..ClipSpec::default()
             },
@@ -203,7 +214,10 @@ pub fn catalogue() -> Vec<Fixture> {
             delivery: Delivery::LiveHls,
             spec: ClipSpec {
                 duration_seconds: 0.0,
-                live_cea608: Some(Channel::One),
+                captions: CaptionPlan::Rolling {
+                    cea608: Some(Channel::One),
+                    cea708: false,
+                },
                 ..ClipSpec::default()
             },
             hls: Some(HlsOptions {
@@ -223,8 +237,10 @@ pub fn catalogue() -> Vec<Fixture> {
             delivery: Delivery::LiveHls,
             spec: ClipSpec {
                 duration_seconds: 0.0,
-                live_cea608: Some(Channel::One),
-                live_cea708: true,
+                captions: CaptionPlan::Rolling {
+                    cea608: Some(Channel::One),
+                    cea708: true,
+                },
                 ..ClipSpec::default()
             },
             hls: Some(HlsOptions {
@@ -245,10 +261,13 @@ pub fn catalogue() -> Vec<Fixture> {
             delivery: Delivery::Vod,
             spec: ClipSpec {
                 duration_seconds: 30.0,
-                cea608: vec![ChannelCues {
-                    channel: Channel::One,
-                    cues: lorem_cues(30.0, 3.0, 2.5),
-                }],
+                captions: CaptionPlan::Finite {
+                    cea608: vec![ChannelCues {
+                        channel: Channel::One,
+                        cues: lorem_cues(30.0, 3.0, 2.5),
+                    }],
+                    cea708: vec![],
+                },
                 ..ClipSpec::default()
             },
             hls: None,
@@ -264,19 +283,22 @@ pub fn catalogue() -> Vec<Fixture> {
             delivery: Delivery::Vod,
             spec: ClipSpec {
                 duration_seconds: 30.0,
-                cea608: vec![
-                    ChannelCues {
-                        channel: Channel::One,
-                        cues: lorem_cues(30.0, 3.0, 2.5),
-                    },
-                    ChannelCues {
-                        channel: Channel::Two,
-                        // Offset so the two channels are never transmitting at
-                        // the same moment, and visibly different so picking the
-                        // wrong one is obvious.
-                        cues: offset_cues(lorem_cues(30.0, 3.0, 2.5), 1.5, "CC2:"),
-                    },
-                ],
+                captions: CaptionPlan::Finite {
+                    cea608: vec![
+                        ChannelCues {
+                            channel: Channel::One,
+                            cues: lorem_cues(30.0, 3.0, 2.5),
+                        },
+                        ChannelCues {
+                            channel: Channel::Two,
+                            // Offset so the two channels are never transmitting
+                            // at the same moment, and visibly different so
+                            // picking the wrong one is obvious.
+                            cues: offset_cues(lorem_cues(30.0, 3.0, 2.5), 1.5, "CC2:"),
+                        },
+                    ],
+                    cea708: vec![],
+                },
                 ..ClipSpec::default()
             },
             hls: None,
@@ -292,11 +314,13 @@ pub fn catalogue() -> Vec<Fixture> {
             delivery: Delivery::Vod,
             spec: ClipSpec {
                 duration_seconds: 30.0,
-                cea608: vec![ChannelCues {
-                    channel: Channel::One,
-                    cues: lorem_cues(30.0, 3.0, 2.5),
-                }],
-                cea708: lorem_cues(30.0, 3.0, 2.5),
+                captions: CaptionPlan::Finite {
+                    cea608: vec![ChannelCues {
+                        channel: Channel::One,
+                        cues: lorem_cues(30.0, 3.0, 2.5),
+                    }],
+                    cea708: lorem_cues(30.0, 3.0, 2.5),
+                },
                 ..ClipSpec::default()
             },
             hls: None,
@@ -314,11 +338,13 @@ pub fn catalogue() -> Vec<Fixture> {
             delivery: Delivery::Vod,
             spec: ClipSpec {
                 duration_seconds: 30.0,
-                cea608: vec![ChannelCues {
-                    channel: Channel::One,
-                    cues: lorem_cues(30.0, 3.0, 2.5),
-                }],
-                cea708: lorem_cues(30.0, 3.0, 2.5),
+                captions: CaptionPlan::Finite {
+                    cea608: vec![ChannelCues {
+                        channel: Channel::One,
+                        cues: lorem_cues(30.0, 3.0, 2.5),
+                    }],
+                    cea708: lorem_cues(30.0, 3.0, 2.5),
+                },
                 announce_captions_in_pmt: true,
                 ..ClipSpec::default()
             },
