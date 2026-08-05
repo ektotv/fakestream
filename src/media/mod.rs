@@ -7,6 +7,7 @@ pub mod hls;
 pub mod live;
 pub mod mux;
 pub mod overlay;
+pub mod pmt;
 pub mod source;
 pub mod subtitles;
 pub mod verify;
