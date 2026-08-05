@@ -15,7 +15,7 @@
 use super::libcaption::Triplet;
 
 /// Marks a triplet as carrying the start of a DTVCC packet. Section 4.3.3.
-const CC_TYPE_PACKET_START: u8 = 0b11;
+pub(crate) const CC_TYPE_PACKET_START: u8 = 0b11;
 /// Marks a triplet as carrying the rest of one.
 const CC_TYPE_PACKET_DATA: u8 = 0b10;
 /// The five marker bits, then the valid bit, leaving the low two for the type.
@@ -597,7 +597,7 @@ const HEADROOM_TRIPLETS: usize = 8;
 /// between 608 and DTVCC. Three keeps a caption's transmission inside the gap
 /// left by the previous one's clear, which is what stops the queue backing up
 /// and pushing every reveal late.
-const PAIRS_PER_FRAME: usize = 3;
+pub(crate) const PAIRS_PER_FRAME: usize = 3;
 
 /// Per-frame DTVCC data for a clip of known length.
 pub struct Schedule {

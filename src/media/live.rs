@@ -12,9 +12,9 @@
 
 use super::hls::HlsOptions;
 use super::mux::ClipSpec;
+use super::pmt::PmtAnnouncer;
 use super::{MediaError, clock, context, ffi, overlay, source::Beeps, source::paint_pattern};
-use crate::captions::libcaption::Channel;
-use crate::captions::rolling::RollingCaptions;
+use crate::captions::rolling::{RollingCaptions, RollingDtvcc};
 use rsmpeg::avcodec::{AVCodec, AVCodecContext};
 use rsmpeg::avformat::AVIOContextContainer;
 use rsmpeg::avformat::{AVFormatContextOutput, AVIOContextCustom};
@@ -33,7 +33,10 @@ pub struct LiveStream {
     picture: AVFrame,
     sound: AVFrame,
     beeps: Beeps,
-    captions: RollingCaptions,
+    /// Endless CEA-608, when the spec asks for it. None means no 608.
+    cea608: Option<RollingCaptions>,
+    /// Endless CEA-708, when the spec asks for it. None means no 708.
+    cea708: Option<RollingDtvcc>,
     muxer: LiveMuxer,
 
     /// Seconds since the epoch when this stream began, which the clock counts
@@ -105,12 +108,19 @@ impl LiveStream {
         context("allocating a live audio frame", sound.alloc_buffer())?;
 
         let beeps = Beeps::every_second(spec.sample_rate as u32);
-        let captions = RollingCaptions::new(
-            spec.fps,
-            CAPTION_INTERVAL_SECONDS,
-            CAPTION_VISIBLE_SECONDS,
-            Channel::One,
-        );
+        // Captions come from the spec now, so the plain live streams carry none
+        // and dedicated fixtures ask for 608, 708, or both.
+        let cea608 = spec.live_cea608.map(|channel| {
+            RollingCaptions::new(
+                spec.fps,
+                CAPTION_INTERVAL_SECONDS,
+                CAPTION_VISIBLE_SECONDS,
+                channel,
+            )
+        });
+        let cea708 = spec.live_cea708.then(|| {
+            RollingDtvcc::new(spec.fps, CAPTION_INTERVAL_SECONDS, CAPTION_VISIBLE_SECONDS)
+        });
 
         Ok(Self {
             spec,
@@ -119,7 +129,8 @@ impl LiveStream {
             picture,
             sound,
             beeps,
-            captions,
+            cea608,
+            cea708,
             muxer,
             unix_start,
             started: Instant::now(),
@@ -194,16 +205,28 @@ impl LiveStream {
         )?;
 
         // Captions ride in the video's own SEI, so a live stream needs no extra
-        // track for them, which is how live IPTV carries captions too.
+        // track for them, which is how live IPTV carries captions too. The 608
+        // pair goes first, then any 708 pairs, exactly as the VOD path packs
+        // them into one buffer.
         ffi::clear_captions(&mut self.picture);
-        let triplet = self
-            .captions
-            .triplet_for(self.frame, self.unix_start)
-            .map_err(|error| MediaError::Ffmpeg {
-                doing: "encoding a live caption",
-                detail: error.to_string(),
-            })?;
-        ffi::attach_captions(&mut self.picture, &triplet)?;
+        let mut cc_data: Vec<u8> = Vec::new();
+        if let Some(cea608) = &mut self.cea608 {
+            let triplet = cea608
+                .triplet_for(self.frame, self.unix_start)
+                .map_err(|error| MediaError::Ffmpeg {
+                    doing: "encoding a live caption",
+                    detail: error.to_string(),
+                })?;
+            cc_data.extend_from_slice(&triplet);
+        }
+        if let Some(cea708) = &mut self.cea708 {
+            for triplet in cea708.triplets_for(self.frame, self.unix_start) {
+                cc_data.extend_from_slice(&triplet);
+            }
+        }
+        if !cc_data.is_empty() {
+            ffi::attach_captions(&mut self.picture, &cc_data)?;
+        }
 
         self.picture.set_pts(self.frame as i64);
         context(
@@ -263,6 +286,10 @@ struct LiveMuxer {
     /// Filled by the write callback when muxing into memory. Absent for HLS,
     /// where the muxer writes files itself.
     sink: Option<Arc<Mutex<Vec<u8>>>>,
+    /// Splices the caption descriptor into the PMT of the outgoing bytes, when
+    /// the spec asks for it. Only the memory TS path can carry one, since HLS
+    /// writes its own segment files.
+    announcer: Option<PmtAnnouncer>,
     video_stream_tb: sys::AVRational,
     audio_stream_tb: sys::AVRational,
 }
@@ -321,6 +348,7 @@ impl LiveMuxer {
         Ok(Self {
             output,
             sink: None,
+            announcer: None,
             video_stream_tb,
             audio_stream_tb,
         })
@@ -391,9 +419,18 @@ impl LiveMuxer {
         let video_stream_tb = output.streams()[0].time_base;
         let audio_stream_tb = output.streams()[1].time_base;
 
+        // Announce the SEI captions in the PMT only when asked and only when
+        // there is something to announce.
+        let announcer = spec
+            .announce_captions_in_pmt
+            .then(|| spec.caption_services())
+            .filter(|services| !services.is_empty())
+            .map(|services| PmtAnnouncer::new(super::pmt::caption_service_descriptor(&services)));
+
         Ok(Self {
             output,
             sink: Some(sink),
+            announcer,
             video_stream_tb,
             audio_stream_tb,
         })
@@ -436,13 +473,22 @@ impl LiveMuxer {
             return Ok(Vec::new());
         };
 
-        match sink.lock() {
-            Ok(mut sink) => Ok(std::mem::take(&mut *sink)),
-            Err(_) => Err(MediaError::Ffmpeg {
-                doing: "reading live output",
-                detail: "the output buffer was poisoned".to_string(),
-            }),
-        }
+        let bytes = match sink.lock() {
+            Ok(mut sink) => std::mem::take(&mut *sink),
+            Err(_) => {
+                return Err(MediaError::Ffmpeg {
+                    doing: "reading live output",
+                    detail: "the output buffer was poisoned".to_string(),
+                });
+            }
+        };
+
+        // Splice the caption descriptor into any PMT the bytes carry, holding a
+        // trailing partial packet until the rest arrives.
+        Ok(match &mut self.announcer {
+            Some(announcer) => announcer.feed(&bytes),
+            None => bytes,
+        })
     }
 }
 
