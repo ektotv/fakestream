@@ -41,6 +41,10 @@ pub struct ClipSpec {
     pub cea708: Vec<Cue>,
     /// Subtitle tracks, each its own stream in the container.
     pub subtitles: Vec<SubtitleTrack>,
+    /// Announce the SEI captions in the PMT with a caption_service_descriptor,
+    /// once the MPEG-TS is muxed. Only meaningful for a TS container carrying
+    /// CEA captions. Off by default, so the plain CEA fixtures stay unannounced.
+    pub announce_captions_in_pmt: bool,
 }
 
 impl Default for ClipSpec {
@@ -57,6 +61,7 @@ impl Default for ClipSpec {
             cea608: Vec::new(),
             cea708: Vec::new(),
             subtitles: Vec::new(),
+            announce_captions_in_pmt: false,
         }
     }
 }
@@ -94,6 +99,35 @@ impl ClipSpec {
             num: 1,
             den: SUBTITLE_TIMEBASE,
         }
+    }
+
+    /// The caption services to announce in the PMT, derived from the SEI
+    /// captions this clip carries. English throughout, since that is all the
+    /// synthetic cues say.
+    pub(crate) fn caption_services(&self) -> Vec<super::pmt::CaptionService> {
+        use super::pmt::{CaptionService, ServiceKind};
+
+        let mut services = Vec::new();
+        // The 608 channels in use here (one and two) both ride field 1, so a
+        // single line 21 field 1 service announces whichever carries text.
+        if !self.cea608.is_empty() {
+            services.push(CaptionService {
+                language: *b"eng",
+                kind: ServiceKind::Line21 { field2: false },
+                easy_reader: false,
+                wide_aspect: true,
+            });
+        }
+        if !self.cea708.is_empty() {
+            // Service 1 is the primary caption service.
+            services.push(CaptionService {
+                language: *b"eng",
+                kind: ServiceKind::Digital { service_number: 1 },
+                easy_reader: false,
+                wide_aspect: true,
+            });
+        }
+        services
     }
 }
 

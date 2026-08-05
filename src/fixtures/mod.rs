@@ -191,6 +191,29 @@ pub fn catalogue() -> Vec<Fixture> {
             hls: None,
         },
         Fixture {
+            id: "vod-ts-cea-pmt",
+            title: "MPEG-TS with CEA captions announced in the PMT",
+            purpose: "The same in-band 608 and 708 captions as the other TS \
+                  fixtures, but this time announced in the PMT with an ATSC \
+                  caption_service_descriptor. Tests a player that only shows \
+                  captions the container advertises and ignores unannounced \
+                  SEI. The descriptor lists a 608 field 1 service and 708 \
+                  service 1, both English.",
+            route: "vod/cea-pmt.ts",
+            delivery: Delivery::Vod,
+            spec: ClipSpec {
+                duration_seconds: 30.0,
+                cea608: vec![ChannelCues {
+                    channel: Channel::One,
+                    cues: lorem_cues(30.0, 3.0, 2.5),
+                }],
+                cea708: lorem_cues(30.0, 3.0, 2.5),
+                announce_captions_in_pmt: true,
+                ..ClipSpec::default()
+            },
+            hls: None,
+        },
+        Fixture {
             id: "vod-ts-dvbsub",
             title: "MPEG-TS with DVB bitmap subtitles",
             purpose: "Subtitles as pictures on their own announced stream, the \
@@ -419,6 +442,8 @@ pub enum BuildError {
     },
     /// A path that cannot cross the FFI boundary, which means it holds a null.
     UnusablePath(PathBuf),
+    /// The muxed TS could not be given its PMT caption descriptor.
+    Pmt(crate::media::pmt::PmtError),
 }
 
 impl std::fmt::Display for BuildError {
@@ -429,6 +454,7 @@ impl std::fmt::Display for BuildError {
             Self::UnusablePath(path) => {
                 write!(formatter, "{} cannot be passed to ffmpeg", path.display())
             }
+            Self::Pmt(error) => write!(formatter, "adding the PMT caption descriptor: {error:?}"),
         }
     }
 }
@@ -438,6 +464,12 @@ impl std::error::Error for BuildError {}
 impl From<MediaError> for BuildError {
     fn from(error: MediaError) -> Self {
         Self::Media(error)
+    }
+}
+
+impl From<crate::media::pmt::PmtError> for BuildError {
+    fn from(error: crate::media::pmt::PmtError) -> Self {
+        Self::Pmt(error)
     }
 }
 
@@ -498,8 +530,32 @@ fn build_file(
 
     write_clip_reporting(&Target::File(&c_path), &fixture.spec, progress)?;
 
+    if fixture.spec.announce_captions_in_pmt {
+        announce_captions_in_pmt(&partial, &fixture.spec)?;
+    }
+
     std::fs::rename(&partial, target).map_err(|source| BuildError::Io {
         path: target.to_path_buf(),
+        source,
+    })
+}
+
+/// Rewrite a muxed TS in place so its PMT announces the SEI captions.
+///
+/// ffmpeg leaves the caption_service_descriptor out, so this reads the whole
+/// file back, splices the descriptor into every PMT copy, and writes it again.
+fn announce_captions_in_pmt(path: &Path, spec: &ClipSpec) -> Result<(), BuildError> {
+    let descriptor = crate::media::pmt::caption_service_descriptor(&spec.caption_services());
+
+    let mut bytes = std::fs::read(path).map_err(|source| BuildError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+
+    crate::media::pmt::announce_captions(&mut bytes, &descriptor)?;
+
+    std::fs::write(path, &bytes).map_err(|source| BuildError::Io {
+        path: path.to_path_buf(),
         source,
     })
 }
