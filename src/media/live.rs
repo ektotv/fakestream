@@ -21,7 +21,6 @@ use rsmpeg::avcodec::AVCodecContext;
 use rsmpeg::avformat::AVIOContextContainer;
 use rsmpeg::avformat::{AVFormatContextOutput, AVIOContextCustom};
 use rsmpeg::avutil::{AVFrame, AVMem};
-use rsmpeg::ffi as sys;
 use std::ffi::CStr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -230,8 +229,8 @@ struct LiveMuxer {
     /// the spec asks for it. Only the memory TS path can carry one, since HLS
     /// writes its own segment files.
     announcer: Option<PmtAnnouncer>,
-    video_stream_tb: sys::AVRational,
-    audio_stream_tb: sys::AVRational,
+    video_stream_tb: ffi::TimeBase,
+    audio_stream_tb: ffi::TimeBase,
 }
 
 impl LiveMuxer {
@@ -272,8 +271,8 @@ impl LiveMuxer {
             });
         }
 
-        let video_stream_tb = output.streams()[0].time_base;
-        let audio_stream_tb = output.streams()[1].time_base;
+        let video_stream_tb = ffi::TimeBase::from_raw(output.streams()[0].time_base);
+        let audio_stream_tb = ffi::TimeBase::from_raw(output.streams()[1].time_base);
 
         Ok(Self {
             output,
@@ -328,8 +327,8 @@ impl LiveMuxer {
         // technically already started.
         ffi::flush_output(&mut output);
 
-        let video_stream_tb = output.streams()[0].time_base;
-        let audio_stream_tb = output.streams()[1].time_base;
+        let video_stream_tb = ffi::TimeBase::from_raw(output.streams()[0].time_base);
+        let audio_stream_tb = ffi::TimeBase::from_raw(output.streams()[1].time_base);
 
         // Announce the SEI captions in the PMT only when asked and only when
         // there is something to announce.
@@ -352,7 +351,7 @@ impl LiveMuxer {
         &mut self,
         encoder: &mut AVCodecContext,
         stream_index: i32,
-        encoder_tb: sys::AVRational,
+        encoder_tb: ffi::TimeBase,
     ) -> Result<(), MediaError> {
         let stream_tb = if stream_index == 0 {
             self.video_stream_tb

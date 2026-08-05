@@ -75,25 +75,16 @@ impl ClipSpec {
         (self.duration_seconds * f64::from(self.fps)).round() as i64
     }
 
-    pub(crate) fn video_time_base(&self) -> sys::AVRational {
-        sys::AVRational {
-            num: 1,
-            den: self.fps,
-        }
+    pub(crate) fn video_time_base(&self) -> ffi::TimeBase {
+        ffi::TimeBase::new(1, self.fps)
     }
 
-    pub(crate) fn audio_time_base(&self) -> sys::AVRational {
-        sys::AVRational {
-            num: 1,
-            den: self.sample_rate,
-        }
+    pub(crate) fn audio_time_base(&self) -> ffi::TimeBase {
+        ffi::TimeBase::new(1, self.sample_rate)
     }
 
-    pub(crate) fn subtitle_time_base(&self) -> sys::AVRational {
-        sys::AVRational {
-            num: 1,
-            den: SUBTITLE_TIMEBASE,
-        }
+    pub(crate) fn subtitle_time_base(&self) -> ffi::TimeBase {
+        ffi::TimeBase::new(1, SUBTITLE_TIMEBASE)
     }
 
     /// The caption services to announce in the PMT, derived from the SEI
@@ -211,7 +202,7 @@ pub fn write_clip_reporting(
         let encoder = open_subtitle_encoder(spec, track)?;
         let mut stream = output.new_stream();
         stream.set_codecpar(encoder.extract_codecpar());
-        stream.set_time_base(spec.subtitle_time_base());
+        stream.set_time_base(spec.subtitle_time_base().raw());
         stream.set_metadata(Some(track_metadata(track)?));
         subtitle_encoders.push(encoder);
     }
@@ -230,10 +221,12 @@ pub fn write_clip_reporting(
 
     // write_header is free to replace the time bases just set, and MPEG-TS
     // always does, forcing 90kHz. Read back what the muxer settled on.
-    let video_stream_tb = output.streams()[0].time_base;
-    let audio_stream_tb = output.streams()[1].time_base;
-    let subtitle_stream_tbs: Vec<sys::AVRational> = (0..spec.subtitles.len())
-        .map(|index| output.streams()[FIRST_SUBTITLE_STREAM + index].time_base)
+    let video_stream_tb = ffi::TimeBase::from_raw(output.streams()[0].time_base);
+    let audio_stream_tb = ffi::TimeBase::from_raw(output.streams()[1].time_base);
+    let subtitle_stream_tbs: Vec<ffi::TimeBase> = (0..spec.subtitles.len())
+        .map(|index| {
+            ffi::TimeBase::from_raw(output.streams()[FIRST_SUBTITLE_STREAM + index].time_base)
+        })
         .collect();
 
     let mut picture = encode::new_video_frame(spec)?;
@@ -426,7 +419,7 @@ fn open_subtitle_encoder(
     // The display a subtitle positions itself against, which is the video.
     encoder.set_width(spec.width);
     encoder.set_height(spec.height);
-    encoder.set_time_base(spec.subtitle_time_base());
+    encoder.set_time_base(spec.subtitle_time_base().raw());
 
     if track.format.needs_ass_header() {
         let header = ass::header();
@@ -443,7 +436,7 @@ fn write_subtitle(
     encoder: &mut AVCodecContext,
     spec: &ClipSpec,
     event: &SubtitleEvent,
-    stream_tb: sys::AVRational,
+    stream_tb: ffi::TimeBase,
 ) -> Result<(), MediaError> {
     let track = &spec.subtitles[event.track];
     let duration_ms = (event.duration_seconds.unwrap_or(0.0) * 1000.0) as u32;
