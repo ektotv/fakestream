@@ -1,6 +1,6 @@
 [package]
 name = "fakestream"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 description = "Generates synthetic test video for people building AV players"
 license = "GPL-3.0-or-later"
