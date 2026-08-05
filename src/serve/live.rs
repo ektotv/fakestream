@@ -39,31 +39,21 @@ pub async fn stream(spec: ClipSpec) -> Response {
             }
         }
 
-        loop {
-            // Pace against the stream's own start, so a slow encode is absorbed
-            // rather than pushing every later frame back.
-            let wait = live.wait_before_next();
-            if !wait.is_zero() {
-                std::thread::sleep(wait);
+        // An empty chunk is normal, since encoders buffer. A closed channel
+        // means the viewer went away, the ordinary way a live stream ends.
+        let outcome = live.pump(|chunk| {
+            if chunk.is_empty() {
+                return std::ops::ControlFlow::Continue(());
             }
+            if sender.blocking_send(Ok(chunk)).is_err() {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        });
 
-            match live.next_chunk() {
-                Ok(chunk) => {
-                    // An empty chunk is normal, since encoders buffer.
-                    if chunk.is_empty() {
-                        continue;
-                    }
-                    // A closed channel means the viewer went away, which is the
-                    // ordinary way a live stream ends.
-                    if sender.blocking_send(Ok(chunk)).is_err() {
-                        return;
-                    }
-                }
-                Err(error) => {
-                    let _ = sender.blocking_send(Err(error.to_string()));
-                    return;
-                }
-            }
+        if let Err(error) = outcome {
+            let _ = sender.blocking_send(Err(error.to_string()));
         }
     });
 

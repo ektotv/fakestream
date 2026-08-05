@@ -22,6 +22,7 @@ use rsmpeg::avformat::AVIOContextContainer;
 use rsmpeg::avformat::{AVFormatContextOutput, AVIOContextCustom};
 use rsmpeg::avutil::{AVFrame, AVMem};
 use std::ffi::CStr;
+use std::ops::ControlFlow;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -211,6 +212,29 @@ impl LiveStream {
 
         self.frame += 1;
         self.muxer.take_output()
+    }
+
+    /// Pace this stream in real time, handing each produced chunk to `sink`
+    /// until it asks to stop or the stream errors.
+    ///
+    /// The cadence, waiting against the stream's own start so a slow encode is
+    /// absorbed rather than pushing every later frame back, lives here so the
+    /// progressive-HTTP and HLS callers share one loop rather than two.
+    pub fn pump<S>(&mut self, mut sink: S) -> Result<(), MediaError>
+    where
+        S: FnMut(Vec<u8>) -> ControlFlow<()>,
+    {
+        loop {
+            let wait = self.wait_before_next();
+            if !wait.is_zero() {
+                std::thread::sleep(wait);
+            }
+
+            let chunk = self.next_chunk()?;
+            if let ControlFlow::Break(()) = sink(chunk) {
+                return Ok(());
+            }
+        }
     }
 }
 

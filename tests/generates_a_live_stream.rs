@@ -5,6 +5,7 @@
 use fakestream::media::clock;
 use fakestream::media::live::LiveStream;
 use fakestream::media::mux::ClipSpec;
+use std::ops::ControlFlow;
 
 fn spec() -> ClipSpec {
     ClipSpec {
@@ -13,6 +14,30 @@ fn spec() -> ClipSpec {
         video_bitrate: 200_000,
         ..ClipSpec::default()
     }
+}
+
+#[test]
+fn pump_feeds_the_sink_until_it_asks_to_stop() {
+    // The pacing loop both live callers share: it hands each chunk to the sink
+    // and stops when the sink breaks, returning without error.
+    let mut live = LiveStream::new(spec()).expect("stream should start");
+    let mut chunks = 0usize;
+    let mut bytes = 0usize;
+
+    // Stop once real output has flowed (the encoder buffers before its first
+    // packet), with a safety cap so a stuck stream cannot loop forever.
+    let outcome = live.pump(|chunk| {
+        chunks += 1;
+        bytes += chunk.len();
+        if bytes > 0 || chunks >= 300 {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    });
+
+    assert!(outcome.is_ok(), "pump reported an error: {outcome:?}");
+    assert!(bytes > 0, "pump handed over no bytes");
 }
 
 #[test]
