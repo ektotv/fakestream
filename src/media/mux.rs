@@ -7,6 +7,7 @@ use crate::captions::ass;
 use crate::captions::cea608::{self, ChannelCues};
 use crate::captions::cea708;
 use crate::captions::dvb::{self, Layout};
+use crate::captions::libcaption::Channel;
 use crate::captions::script::Cue;
 use rsmpeg::avcodec::{AVCodec, AVCodecContext};
 use rsmpeg::avformat::AVFormatContextOutput;
@@ -45,6 +46,13 @@ pub struct ClipSpec {
     /// once the MPEG-TS is muxed. Only meaningful for a TS container carrying
     /// CEA captions. Off by default, so the plain CEA fixtures stay unannounced.
     pub announce_captions_in_pmt: bool,
+    /// For a live stream, the CEA-608 channel to carry, generated endlessly.
+    /// None means no 608. VOD uses `cea608` instead, since it has a fixed cue
+    /// list rather than a rolling generator.
+    pub live_cea608: Option<Channel>,
+    /// For a live stream, whether to carry an endless CEA-708 service. VOD uses
+    /// `cea708` instead.
+    pub live_cea708: bool,
 }
 
 impl Default for ClipSpec {
@@ -62,6 +70,8 @@ impl Default for ClipSpec {
             cea708: Vec::new(),
             subtitles: Vec::new(),
             announce_captions_in_pmt: false,
+            live_cea608: None,
+            live_cea708: false,
         }
     }
 }
@@ -108,9 +118,11 @@ impl ClipSpec {
         use super::pmt::{CaptionService, ServiceKind};
 
         let mut services = Vec::new();
-        // The 608 channels in use here (one and two) both ride field 1, so a
-        // single line 21 field 1 service announces whichever carries text.
-        if !self.cea608.is_empty() {
+        // Either the VOD cue list or the live rolling generator can carry 608.
+        // The channels in use here (one and two) both ride field 1, so a single
+        // line 21 field 1 service announces whichever carries text.
+        let has_608 = !self.cea608.is_empty() || self.live_cea608.is_some();
+        if has_608 {
             services.push(CaptionService {
                 language: *b"eng",
                 kind: ServiceKind::Line21 { field2: false },
@@ -118,7 +130,8 @@ impl ClipSpec {
                 wide_aspect: true,
             });
         }
-        if !self.cea708.is_empty() {
+        let has_708 = !self.cea708.is_empty() || self.live_cea708;
+        if has_708 {
             // Service 1 is the primary caption service.
             services.push(CaptionService {
                 language: *b"eng",

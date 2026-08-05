@@ -58,8 +58,6 @@ pub enum PmtError {
     Malformed,
     /// No PAT was found, so the PMT PID is unknown.
     NoProgramTable,
-    /// The PAT named no program, so there is no PMT to edit.
-    NoProgram,
     /// No PMT packet was found on the PID the PAT pointed at.
     NoMapTable,
     /// The PMT names no elementary stream to attach the descriptor to.
@@ -138,6 +136,63 @@ pub fn announce_captions(ts: &mut [u8], descriptor: &[u8]) -> Result<usize, PmtE
         return Err(PmtError::NoMapTable);
     }
     Ok(rewritten)
+}
+
+/// Splices the caption descriptor into the PMT of a transport stream that
+/// arrives as a byte stream rather than a finished file.
+///
+/// A live muxer hands over bytes that can end part way through a packet, and
+/// its PAT and PMT recur through the stream. This holds a trailing partial
+/// packet between calls, learns the PMT PID from the first PAT it sees, and
+/// rewrites every PMT packet after that.
+///
+/// It never fails: a packet it cannot safely edit is passed through untouched,
+/// since dropping a live stream would be worse than a missing descriptor.
+pub struct PmtAnnouncer {
+    descriptor: Vec<u8>,
+    pmt_pid: Option<u16>,
+    /// Bytes of an incomplete trailing packet, kept until the rest arrives.
+    partial: Vec<u8>,
+}
+
+impl PmtAnnouncer {
+    pub fn new(descriptor: Vec<u8>) -> Self {
+        Self {
+            descriptor,
+            pmt_pid: None,
+            partial: Vec::new(),
+        }
+    }
+
+    /// Feed the next run of muxed bytes, returning them with every whole PMT
+    /// packet rewritten. Bytes of a final partial packet are held back until a
+    /// later call completes it, so output can be shorter than input.
+    pub fn feed(&mut self, chunk: &[u8]) -> Vec<u8> {
+        self.partial.extend_from_slice(chunk);
+
+        let whole = (self.partial.len() / PACKET) * PACKET;
+        let mut out: Vec<u8> = self.partial.drain(..whole).collect();
+
+        for packet in out.chunks_mut(PACKET) {
+            self.process(packet);
+        }
+        out
+    }
+
+    /// Learn the PMT PID from a PAT, and rewrite the packet if it is a PMT.
+    fn process(&mut self, packet: &mut [u8]) {
+        if packet[0] != 0x47 {
+            return;
+        }
+        if let Some(pid) = pmt_pid_from_pat(packet) {
+            self.pmt_pid = Some(pid);
+        }
+        if self.pmt_pid == Some(packet_pid(packet)) && payload_unit_start(packet) {
+            // An unfixable packet is left as it is rather than killing the
+            // stream; the next PMT copy will carry the descriptor.
+            let _ = rewrite_pmt(packet, &self.descriptor);
+        }
+    }
 }
 
 /// Read back the caption_service_descriptor from the video stream of the first
@@ -234,36 +289,43 @@ fn section_start(packet: &[u8]) -> Option<usize> {
 
 /// Find the PMT PID by reading the first program out of the PAT.
 fn find_pmt_pid(ts: &[u8]) -> Result<u16, PmtError> {
-    for packet in ts.chunks(PACKET) {
-        if packet_pid(packet) != 0 || !payload_unit_start(packet) {
-            continue;
-        }
-        let section = section_start(packet).ok_or(PmtError::Malformed)?;
-        // table_id 0x00 is the PAT.
-        if *packet.get(section).ok_or(PmtError::Malformed)? != 0x00 {
-            continue;
-        }
-        let length = section_length(packet, section).ok_or(PmtError::Malformed)?;
-        // Programs sit between the eight byte header and the four byte CRC.
-        let programs_start = section + 8;
-        let programs_end = section + 3 + length - 4;
-        if programs_end > packet.len() || programs_end < programs_start {
-            return Err(PmtError::Malformed);
-        }
+    ts.chunks(PACKET)
+        .find_map(pmt_pid_from_pat)
+        .ok_or(PmtError::NoProgramTable)
+}
 
-        let mut at = programs_start;
-        while at + 4 <= programs_end {
-            let program_number = ((packet[at] as u16) << 8) | packet[at + 1] as u16;
-            let pid = (((packet[at + 2] as u16) & 0x1F) << 8) | packet[at + 3] as u16;
-            // Program 0 is the network PID, not a program map.
-            if program_number != 0 {
-                return Ok(pid);
-            }
-            at += 4;
-        }
-        return Err(PmtError::NoProgram);
+/// The first program's PMT PID, if this packet is a PAT that names one.
+fn pmt_pid_from_pat(packet: &[u8]) -> Option<u16> {
+    if packet_pid(packet) != 0 || !payload_unit_start(packet) {
+        return None;
     }
-    Err(PmtError::NoProgramTable)
+    let section = section_start(packet)?;
+    // table_id 0x00 is the PAT.
+    if *packet.get(section)? != 0x00 {
+        return None;
+    }
+    let length = section_length(packet, section)?;
+    if length < 4 {
+        return None;
+    }
+    // Programs sit between the eight byte header and the four byte CRC.
+    let programs_start = section + 8;
+    let programs_end = section + 3 + length - 4;
+    if programs_end > packet.len() || programs_end < programs_start {
+        return None;
+    }
+
+    let mut at = programs_start;
+    while at + 4 <= programs_end {
+        let program_number = ((packet[at] as u16) << 8) | packet[at + 1] as u16;
+        let pid = (((packet[at + 2] as u16) & 0x1F) << 8) | packet[at + 3] as u16;
+        // Program 0 is the network PID, not a program map.
+        if program_number != 0 {
+            return Some(pid);
+        }
+        at += 4;
+    }
+    None
 }
 
 /// Splice the descriptor into one PMT packet. Returns whether it changed
@@ -548,6 +610,81 @@ mod tests {
         assert_eq!(
             video_caption_descriptor(&ts).as_deref(),
             Some(descriptor.as_slice())
+        );
+    }
+
+    #[test]
+    fn the_announcer_rewrites_a_whole_stream_fed_at_once() {
+        let pmt_pid = 0x1000;
+        let ts = pat_packet_and_pmt(pmt_pid, &[(0x1B, 0x0100), (0x0F, 0x0101)]);
+        let descriptor = caption_service_descriptor(&[CaptionService {
+            language: *b"eng",
+            kind: ServiceKind::Digital { service_number: 1 },
+            easy_reader: false,
+            wide_aspect: true,
+        }]);
+
+        let mut announcer = PmtAnnouncer::new(descriptor.clone());
+        let out = announcer.feed(&ts);
+
+        assert_eq!(out.len(), ts.len(), "whole packets in, whole packets out");
+        assert_eq!(
+            video_caption_descriptor(&out).as_deref(),
+            Some(descriptor.as_slice())
+        );
+    }
+
+    #[test]
+    fn the_announcer_reassembles_packets_split_across_feeds() {
+        let pmt_pid = 0x1000;
+        let ts = pat_packet_and_pmt(pmt_pid, &[(0x1B, 0x0100), (0x0F, 0x0101)]);
+        let descriptor = caption_service_descriptor(&[CaptionService {
+            language: *b"eng",
+            kind: ServiceKind::Line21 { field2: false },
+            easy_reader: false,
+            wide_aspect: true,
+        }]);
+
+        // Feed the stream in awkward slices that cut through the middle of the
+        // PMT packet, the way a live muxer's output can arrive.
+        let mut announcer = PmtAnnouncer::new(descriptor.clone());
+        let mut collected = Vec::new();
+        for slice in ts.chunks(100) {
+            collected.extend_from_slice(&announcer.feed(slice));
+        }
+
+        assert_eq!(collected.len(), ts.len(), "no bytes lost across feeds");
+        assert_eq!(
+            video_caption_descriptor(&collected).as_deref(),
+            Some(descriptor.as_slice())
+        );
+    }
+
+    #[test]
+    fn the_announcer_remembers_the_pmt_pid_across_feeds() {
+        // The PAT and the PMT arrive in separate feeds, as they can once the
+        // stream is running, so the PID has to be remembered from the PAT.
+        let pmt_pid = 0x1000;
+        let pat = psi_packet(0x0000, &pat_section(pmt_pid));
+        let pmt = psi_packet(pmt_pid, &pmt_section(&[(0x1B, 0x0100), (0x0F, 0x0101)]));
+        let descriptor = caption_service_descriptor(&[CaptionService {
+            language: *b"eng",
+            kind: ServiceKind::Digital { service_number: 1 },
+            easy_reader: false,
+            wide_aspect: true,
+        }]);
+
+        let mut announcer = PmtAnnouncer::new(descriptor.clone());
+        let mut stream = announcer.feed(&pat);
+        stream.extend_from_slice(&announcer.feed(&pmt));
+
+        // The read-back needs the PAT to locate the PMT, so check the whole
+        // stream. The descriptor being there proves the later PMT was rewritten
+        // from a PID learned in the earlier feed.
+        assert_eq!(
+            video_caption_descriptor(&stream).as_deref(),
+            Some(descriptor.as_slice()),
+            "the PMT in a later feed was not rewritten"
         );
     }
 

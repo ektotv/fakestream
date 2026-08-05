@@ -9,9 +9,10 @@
 //! checkable by eye: if the caption says 15:45:22 while the clock says
 //! 15:45:24, the player is two seconds out on captions.
 
+use super::cea708::{CC_TYPE_PACKET_START, Dtvcc, PAIRS_PER_FRAME};
 use super::libcaption::{self, CaptionError, Channel, Triplet};
 use super::script::Cue;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 /// How long before its display time a caption starts being prepared.
 ///
@@ -162,23 +163,140 @@ impl RollingCaptions {
 
     /// Build the caption text, carrying the time it is due to appear.
     fn cue_for(&self, number: u64, display_seconds: f64, unix_start: f64) -> Cue {
-        let wall = (unix_start + display_seconds) % 86_400.0;
-        let whole = wall as u64;
+        rolling_cue(number, display_seconds, self.visible, unix_start, "")
+    }
+}
 
-        let stamp = format!(
-            "{:02}:{:02}:{:02}",
-            whole / 3600,
-            (whole % 3600) / 60,
-            whole % 60
-        );
-        let words = WORDS[(number as usize) % WORDS.len()];
+/// Build a rolling caption's two rows: the wall clock time it is due to appear,
+/// then a numbered line of text. Carrying the time makes caption timing
+/// checkable by eye against the on-screen clock. `label` marks which service
+/// the text belongs to when two share the screen, and is empty for 608.
+fn rolling_cue(
+    number: u64,
+    display_seconds: f64,
+    visible: f64,
+    unix_start: f64,
+    label: &str,
+) -> Cue {
+    let wall = (unix_start + display_seconds) % 86_400.0;
+    let whole = wall as u64;
 
-        Cue {
-            start: display_seconds,
-            duration: self.visible,
-            // Two rows: the time, then the words. Both fit a 608 row easily.
-            lines: vec![stamp, format!("{number}. {words}")],
+    let stamp = format!(
+        "{:02}:{:02}:{:02}",
+        whole / 3600,
+        (whole % 3600) / 60,
+        whole % 60
+    );
+    let words = WORDS[(number as usize) % WORDS.len()];
+
+    Cue {
+        start: display_seconds,
+        duration: visible,
+        lines: vec![stamp, format!("{number}. {label}{words}")],
+    }
+}
+
+/// Produces DTVCC (CEA-708) data for an endless stream, the live counterpart of
+/// the finite [`super::cea708::schedule`].
+///
+/// It prepares each caption as its moment approaches and drains a fixed number
+/// of pairs per frame, exactly as the scheduler does, but without a timeline of
+/// known length. Transmissions are queued and drained in cue order so a
+/// packet is never split by another, which a decoder would read as a lost
+/// packet and use to reset the service.
+pub struct RollingDtvcc {
+    fps: i32,
+    interval: f64,
+    visible: f64,
+    dtvcc: Dtvcc,
+
+    /// Transmissions due to be queued, in the order they must go out.
+    queued: VecDeque<(u64, Vec<Triplet>)>,
+    /// Triplets waiting for a frame slot, drained a few at a time.
+    pending: VecDeque<Triplet>,
+    /// Which caption is next to be prepared.
+    next_caption: u64,
+    /// The rolling packet sequence number, stamped in emission order.
+    sequence: u8,
+}
+
+impl RollingDtvcc {
+    pub fn new(fps: i32, interval: f64, visible: f64) -> Self {
+        Self {
+            fps: fps.max(1),
+            interval,
+            visible: visible.min(interval),
+            dtvcc: Dtvcc::new(),
+            queued: VecDeque::new(),
+            pending: VecDeque::new(),
+            // Number one appears one interval in, matching the 608 driver.
+            next_caption: 1,
+            sequence: 0,
         }
+    }
+
+    /// The DTVCC triplets to attach to a frame, at most a few, preparing more
+    /// work if it is time. `unix_start` only feeds the readable clock in the
+    /// caption text.
+    pub fn triplets_for(&mut self, frame: u64, unix_start: f64) -> Vec<Triplet> {
+        self.prepare_if_due(frame, unix_start);
+
+        // Anything whose moment has come joins the back of the pending buffer,
+        // so packets stay whole and in order even when they overlap in time.
+        while let Some((due, _)) = self.queued.front() {
+            if *due > frame {
+                break;
+            }
+            let (_, triplets) = self.queued.pop_front().expect("front was just checked");
+            self.pending.extend(triplets);
+        }
+
+        let take = self.pending.len().min(PAIRS_PER_FRAME);
+        let mut going_out: Vec<Triplet> = self.pending.drain(..take).collect();
+
+        // Number packets in the order they actually leave. A decoder reading a
+        // sequence that jumps assumes it lost a packet and resets the service,
+        // which silently loses every caption after it.
+        for triplet in &mut going_out {
+            if triplet[0] & 0x03 == CC_TYPE_PACKET_START {
+                triplet[1] = (self.sequence << 6) | (triplet[1] & 0x3F);
+                self.sequence = (self.sequence + 1) & 0x03;
+            }
+        }
+
+        going_out
+    }
+
+    /// Build the next caption once its lead time opens, queueing its prepare,
+    /// show and clear in the order they must transmit.
+    fn prepare_if_due(&mut self, frame: u64, unix_start: f64) {
+        let display_seconds = self.next_caption as f64 * self.interval;
+        let prepare_frame =
+            ((display_seconds - PREPARE_SECONDS) * f64::from(self.fps)).max(0.0) as u64;
+        if frame < prepare_frame {
+            return;
+        }
+
+        let cue = rolling_cue(
+            self.next_caption,
+            display_seconds,
+            self.visible,
+            unix_start,
+            "DTVCC ",
+        );
+        let prepared = self.dtvcc.prepare(&cue.lines);
+        let show = self.dtvcc.show();
+        let clear = self.dtvcc.clear();
+
+        let display_frame = (display_seconds * f64::from(self.fps)).round() as u64;
+        let clear_frame = ((display_seconds + self.visible) * f64::from(self.fps)).round() as u64;
+
+        // Cue order, not time order: a clear must not overtake the next
+        // caption's definition, or it would delete a window just built.
+        self.queued.push_back((prepare_frame, prepared));
+        self.queued.push_back((display_frame, show));
+        self.queued.push_back((clear_frame, clear));
+        self.next_caption += 1;
     }
 }
 
@@ -323,5 +441,102 @@ mod tests {
         let first = captions.cue_for(1, 3.0, 0.0).flattened();
         let second = captions.cue_for(2, 6.0, 0.0).flattened();
         assert_ne!(first, second);
+    }
+
+    fn rolling_dtvcc() -> RollingDtvcc {
+        RollingDtvcc::new(25, 3.0, 2.5)
+    }
+
+    /// The sequence number a packet start carries, in its top two bits.
+    fn packet_sequence(triplet: &Triplet) -> u8 {
+        triplet[1] >> 6
+    }
+
+    #[test]
+    fn dtvcc_sends_nothing_before_the_first_caption_is_prepared() {
+        let mut dtvcc = rolling_dtvcc();
+        // The first caption is due at three seconds and prepared at one, so the
+        // first second of frames has nothing to send.
+        for frame in 0..25 {
+            assert!(
+                dtvcc.triplets_for(frame, 0.0).is_empty(),
+                "frame {frame} sent DTVCC before the first caption was prepared"
+            );
+        }
+    }
+
+    #[test]
+    fn dtvcc_transmits_before_the_display_time() {
+        let mut dtvcc = rolling_dtvcc();
+        let display_frame = 75; // three seconds at 25fps
+
+        let mut sent = 0;
+        for frame in 0..display_frame {
+            sent += dtvcc.triplets_for(frame, 0.0).len();
+        }
+        assert!(sent > 0, "the caption never started transmitting");
+    }
+
+    #[test]
+    fn dtvcc_keeps_producing_captions_indefinitely() {
+        let mut dtvcc = rolling_dtvcc();
+        let mut seen = 0;
+
+        // Two minutes of frames, well past anything a finite schedule would
+        // hold.
+        for frame in 0..(25 * 120) {
+            seen += dtvcc.triplets_for(frame, 0.0).len();
+        }
+
+        assert!(seen > 100, "only {seen} DTVCC triplets over two minutes");
+        assert!(dtvcc.next_caption > 30, "captions stopped being prepared");
+    }
+
+    #[test]
+    fn dtvcc_never_sends_more_than_the_per_frame_budget() {
+        let mut dtvcc = rolling_dtvcc();
+        for frame in 0..(25 * 60) {
+            let count = dtvcc.triplets_for(frame, 0.0).len();
+            assert!(count <= PAIRS_PER_FRAME, "frame {frame} sent {count} pairs");
+        }
+    }
+
+    #[test]
+    fn dtvcc_buffers_do_not_grow_without_bound() {
+        let mut dtvcc = rolling_dtvcc();
+        for frame in 0..(25 * 120) {
+            dtvcc.triplets_for(frame, 0.0);
+        }
+
+        // A stream running for days must not accumulate work.
+        assert!(
+            dtvcc.queued.len() < 8 && dtvcc.pending.len() < 64,
+            "{} queued, {} pending",
+            dtvcc.queued.len(),
+            dtvcc.pending.len()
+        );
+    }
+
+    #[test]
+    fn dtvcc_packet_sequence_advances_in_emission_order() {
+        let mut dtvcc = rolling_dtvcc();
+        let mut sequences = Vec::new();
+
+        for frame in 0..(25 * 30) {
+            for triplet in dtvcc.triplets_for(frame, 0.0) {
+                if triplet[0] & 0x03 == CC_TYPE_PACKET_START {
+                    sequences.push(packet_sequence(&triplet));
+                }
+            }
+        }
+
+        assert!(sequences.len() > 4, "too few packets to check the sequence");
+        for pair in sequences.windows(2) {
+            assert_eq!(
+                pair[1],
+                (pair[0] + 1) & 0x03,
+                "the packet sequence jumped, which resets a decoder"
+            );
+        }
     }
 }

@@ -124,6 +124,117 @@ pub fn catalogue() -> Vec<Fixture> {
             }),
         },
         Fixture {
+            id: "live-ts-cea608",
+            title: "Live MPEG-TS with CEA-608 captions",
+            purpose: "The progressive live stream with rolling closed captions \
+                      in the video SEI. Each caption carries the wall clock time \
+                      it is due, so holding a real clock to the screen shows \
+                      whether captions keep pace with the picture. Tests 608 \
+                      decoding on an endless stream.",
+            route: "live/cea608.ts",
+            delivery: Delivery::Live,
+            spec: ClipSpec {
+                duration_seconds: 0.0,
+                live_cea608: Some(Channel::One),
+                ..ClipSpec::default()
+            },
+            hls: None,
+        },
+        Fixture {
+            id: "live-ts-cea708",
+            title: "Live MPEG-TS with CEA-708 captions",
+            purpose: "The progressive live stream carrying rolling DTVCC \
+                      captions alongside the 608 pairs in the same SEI, as a \
+                      modern broadcast does. Each caption carries the time it is \
+                      due. Tests 708 decoding on an endless stream.",
+            route: "live/cea708.ts",
+            delivery: Delivery::Live,
+            spec: ClipSpec {
+                duration_seconds: 0.0,
+                live_cea608: Some(Channel::One),
+                live_cea708: true,
+                ..ClipSpec::default()
+            },
+            hls: None,
+        },
+        Fixture {
+            id: "live-ts-cea608-pmt",
+            title: "Live MPEG-TS, CEA-608 announced in the PMT",
+            purpose: "The 608 live stream with an ATSC caption_service_descriptor \
+                      spliced into every PMT as it goes past, for a player that \
+                      only shows captions the container advertises. Tests PMT \
+                      caption signalling on an endless stream.",
+            route: "live/cea608-pmt.ts",
+            delivery: Delivery::Live,
+            spec: ClipSpec {
+                duration_seconds: 0.0,
+                live_cea608: Some(Channel::One),
+                announce_captions_in_pmt: true,
+                ..ClipSpec::default()
+            },
+            hls: None,
+        },
+        Fixture {
+            id: "live-ts-cea708-pmt",
+            title: "Live MPEG-TS, CEA-708 announced in the PMT",
+            purpose: "The 708 live stream, carrying 608 too, with both announced \
+                      in every PMT by a caption_service_descriptor. Tests a \
+                      player that reads the PMT to find which caption services a \
+                      live stream carries.",
+            route: "live/cea708-pmt.ts",
+            delivery: Delivery::Live,
+            spec: ClipSpec {
+                duration_seconds: 0.0,
+                live_cea608: Some(Channel::One),
+                live_cea708: true,
+                announce_captions_in_pmt: true,
+                ..ClipSpec::default()
+            },
+            hls: None,
+        },
+        Fixture {
+            id: "live-hls-cea608",
+            title: "Live HLS with CEA-608 captions",
+            purpose: "The rolling HLS playlist with 608 captions in the SEI of \
+                      each segment, the way a live broadcast carries them. Tests \
+                      whether a player finds in-band captions across segment \
+                      boundaries on a live window.",
+            route: "live/hls-cea608/master.m3u8",
+            delivery: Delivery::LiveHls,
+            spec: ClipSpec {
+                duration_seconds: 0.0,
+                live_cea608: Some(Channel::One),
+                ..ClipSpec::default()
+            },
+            hls: Some(HlsOptions {
+                segment_type: SegmentType::MpegTs,
+                segment_seconds: 2.0,
+                kind: PlaylistKind::Live { window_segments: 6 },
+                master_name: "master.m3u8".to_string(),
+            }),
+        },
+        Fixture {
+            id: "live-hls-cea708",
+            title: "Live HLS with CEA-708 captions",
+            purpose: "The rolling HLS playlist carrying DTVCC captions alongside \
+                      the 608 pairs in each segment's SEI. Tests 708 decoding \
+                      across segment boundaries on a live window.",
+            route: "live/hls-cea708/master.m3u8",
+            delivery: Delivery::LiveHls,
+            spec: ClipSpec {
+                duration_seconds: 0.0,
+                live_cea608: Some(Channel::One),
+                live_cea708: true,
+                ..ClipSpec::default()
+            },
+            hls: Some(HlsOptions {
+                segment_type: SegmentType::MpegTs,
+                segment_seconds: 2.0,
+                kind: PlaylistKind::Live { window_segments: 6 },
+                master_name: "master.m3u8".to_string(),
+            }),
+        },
+        Fixture {
             id: "vod-ts-cea608",
             title: "MPEG-TS with CEA-608 captions",
             purpose: "In-band closed captions carried in the video's SEI rather than \
