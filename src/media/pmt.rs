@@ -120,22 +120,18 @@ pub fn announce_captions(ts: &mut [u8], descriptor: &[u8]) -> Result<usize, PmtE
         return Err(PmtError::NotTransportStream);
     }
 
-    let pmt_pid = find_pmt_pid(ts)?;
-
-    let mut rewritten = 0;
+    // A whole buffer is a stream fed all at once, so the same rewriter drives
+    // it, one packet at a time in place. No partial can be left over, since the
+    // input is a whole number of packets.
+    let mut announcer = PmtAnnouncer::new(descriptor.to_vec());
     for packet in ts.chunks_mut(PACKET) {
-        if packet_pid(packet) == pmt_pid
-            && payload_unit_start(packet)
-            && rewrite_pmt(packet, descriptor)?
-        {
-            rewritten += 1;
-        }
+        announcer.process(packet);
     }
 
-    if rewritten == 0 {
+    if announcer.rewritten == 0 {
         return Err(PmtError::NoMapTable);
     }
-    Ok(rewritten)
+    Ok(announcer.rewritten)
 }
 
 /// Splices the caption descriptor into the PMT of a transport stream that
@@ -153,6 +149,8 @@ pub struct PmtAnnouncer {
     pmt_pid: Option<u16>,
     /// Bytes of an incomplete trailing packet, kept until the rest arrives.
     partial: Vec<u8>,
+    /// How many PMT copies have been rewritten so far.
+    rewritten: usize,
 }
 
 impl PmtAnnouncer {
@@ -161,6 +159,7 @@ impl PmtAnnouncer {
             descriptor,
             pmt_pid: None,
             partial: Vec::new(),
+            rewritten: 0,
         }
     }
 
@@ -190,7 +189,9 @@ impl PmtAnnouncer {
         if self.pmt_pid == Some(packet_pid(packet)) && payload_unit_start(packet) {
             // An unfixable packet is left as it is rather than killing the
             // stream; the next PMT copy will carry the descriptor.
-            let _ = rewrite_pmt(packet, &self.descriptor);
+            if let Ok(true) = rewrite_pmt(packet, &self.descriptor) {
+                self.rewritten += 1;
+            }
         }
     }
 }
