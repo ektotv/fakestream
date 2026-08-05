@@ -141,6 +141,7 @@ Both commands take the same flags:
 | `vod/cea608.ts` | CEA-608 hidden in the video, announced by nothing |
 | `vod/cea608-dual.ts` | choosing between caption channels CC1 and CC2 |
 | `vod/cea708.ts` | CEA-708 service data alongside 608, as a broadcast carries both |
+| `vod/cea-pmt.ts` | the same 608 and 708, this time announced in the PMT by a caption_service_descriptor |
 | `vod/dvbsub.ts` | DVB bitmap subtitles on their own track |
 | `vod/tx3g.mp4` | tx3g timed text, the usual subtitles inside MP4 |
 | `vod/ttml.mp4` | TTML as `stpp`, what DASH and CMAF use |
@@ -150,13 +151,18 @@ Both commands take the same flags:
 | `vod/multilingual.mkv` | four subtitle tracks, tagged eng, fra, spa and jpn |
 | `hls/ts/master.m3u8` | HLS with MPEG-TS segments and a WebVTT rendition |
 | `hls/fmp4/master.m3u8` | HLS with fragmented MP4 segments |
-| `live/stream.ts` | endless progressive MPEG-TS, the classic IPTV shape |
+| `live/stream.ts` | endless progressive MPEG-TS, the classic IPTV shape, no captions |
 | `live/hls/master.m3u8` | live HLS, a rolling window that cannot be seeked before |
+| `live/cea608.ts` | endless live CEA-608, each caption stamped with the time it is due |
+| `live/cea708.ts` | endless live CEA-708 alongside 608 in the same SEI |
+| `live/cea608-pmt.ts` | live CEA-608, announced in every PMT |
+| `live/cea708-pmt.ts` | live CEA-608 and 708, announced in every PMT |
+| `live/hls-cea608/master.m3u8` | live HLS carrying CEA-608 across segment boundaries |
+| `live/hls-cea708/master.m3u8` | live HLS carrying CEA-708 across segment boundaries |
 
-Two gaps are known and deliberate. HLS carries one subtitle language, which is
-a limit of ffmpeg's HLS muxer rather than a choice, and the multilingual
-Matroska fixture covers language selection meanwhile. Live streams carry
-CEA-608 but not 708.
+One gap is known and deliberate. HLS carries one subtitle language, which is a
+limit of ffmpeg's HLS muxer rather than a choice, and the multilingual Matroska
+fixture covers language selection meanwhile.
 
 ## Building from source
 
