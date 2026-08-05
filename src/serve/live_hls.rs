@@ -9,6 +9,7 @@ use crate::media::hls::HlsOptions;
 use crate::media::live::LiveStream;
 use crate::media::mux::ClipSpec;
 use std::ffi::CString;
+use std::ops::ControlFlow;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -200,25 +201,24 @@ fn run_writer(
     let mut stream = LiveStream::hls(spec.clone(), &path, options).map_err(|e| e.to_string())?;
     let started = Instant::now();
 
-    loop {
-        let wait = stream.wait_before_next();
-        if !wait.is_zero() {
-            std::thread::sleep(wait);
-        }
-
-        stream.next_chunk().map_err(|error| error.to_string())?;
-
-        let idle = started
-            .elapsed()
-            .as_secs()
-            .saturating_sub(last_request.load(Ordering::Relaxed));
-        if idle > IDLE_TIMEOUT.as_secs() {
-            // Said out loud because a silent stop looks identical to a bug
-            // from the player's side, a playlist that simply stops moving.
-            eprintln!("live hls stopped: nobody watching");
-            return Ok(());
-        }
-    }
+    // The HLS muxer writes its own segment files, so the chunk is empty and
+    // discarded; the writer runs until nobody has asked for a while.
+    stream
+        .pump(|_chunk| {
+            let idle = started
+                .elapsed()
+                .as_secs()
+                .saturating_sub(last_request.load(Ordering::Relaxed));
+            if idle > IDLE_TIMEOUT.as_secs() {
+                // Said out loud because a silent stop looks identical to a bug
+                // from the player's side, a playlist that simply stops moving.
+                eprintln!("live hls stopped: nobody watching");
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        })
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
