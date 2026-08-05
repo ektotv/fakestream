@@ -14,7 +14,7 @@ use super::hls::HlsOptions;
 use super::mux::ClipSpec;
 use super::pmt::PmtAnnouncer;
 use super::{MediaError, clock, context, ffi, overlay, source::Beeps, source::paint_pattern};
-use crate::captions::rolling::{RollingCaptions, RollingDtvcc};
+use crate::captions::feed::CaptionFeed;
 use rsmpeg::avcodec::{AVCodec, AVCodecContext};
 use rsmpeg::avformat::AVIOContextContainer;
 use rsmpeg::avformat::{AVFormatContextOutput, AVIOContextCustom};
@@ -33,10 +33,8 @@ pub struct LiveStream {
     picture: AVFrame,
     sound: AVFrame,
     beeps: Beeps,
-    /// Endless CEA-608, when the spec asks for it. None means no 608.
-    cea608: Option<RollingCaptions>,
-    /// Endless CEA-708, when the spec asks for it. None means no 708.
-    cea708: Option<RollingDtvcc>,
+    /// The SEI captions this stream carries, built from the spec's plan.
+    captions: CaptionFeed,
     muxer: LiveMuxer,
 
     /// Seconds since the epoch when this stream began, which the clock counts
@@ -108,19 +106,13 @@ impl LiveStream {
         context("allocating a live audio frame", sound.alloc_buffer())?;
 
         let beeps = Beeps::every_second(spec.sample_rate as u32);
-        // Captions come from the spec now, so the plain live streams carry none
-        // and dedicated fixtures ask for 608, 708, or both.
-        let cea608 = spec.live_cea608.map(|channel| {
-            RollingCaptions::new(
-                spec.fps,
-                CAPTION_INTERVAL_SECONDS,
-                CAPTION_VISIBLE_SECONDS,
-                channel,
-            )
-        });
-        let cea708 = spec.live_cea708.then(|| {
-            RollingDtvcc::new(spec.fps, CAPTION_INTERVAL_SECONDS, CAPTION_VISIBLE_SECONDS)
-        });
+        // Captions come from the spec's plan, so the plain live streams carry
+        // none and dedicated fixtures ask for 608, 708, or both. A live stream
+        // has no known length, so total_frames is nought here.
+        let captions = context(
+            "scheduling live captions",
+            CaptionFeed::build(&spec.captions, spec.fps, 0, unix_start),
+        )?;
 
         Ok(Self {
             spec,
@@ -129,8 +121,7 @@ impl LiveStream {
             picture,
             sound,
             beeps,
-            cea608,
-            cea708,
+            captions,
             muxer,
             unix_start,
             started: Instant::now(),
@@ -205,25 +196,9 @@ impl LiveStream {
         )?;
 
         // Captions ride in the video's own SEI, so a live stream needs no extra
-        // track for them, which is how live IPTV carries captions too. The 608
-        // pair goes first, then any 708 pairs, exactly as the VOD path packs
-        // them into one buffer.
+        // track for them, which is how live IPTV carries captions too.
         ffi::clear_captions(&mut self.picture);
-        let mut cc_data: Vec<u8> = Vec::new();
-        if let Some(cea608) = &mut self.cea608 {
-            let triplet = cea608
-                .triplet_for(self.frame, self.unix_start)
-                .map_err(|error| MediaError::Ffmpeg {
-                    doing: "encoding a live caption",
-                    detail: error.to_string(),
-                })?;
-            cc_data.extend_from_slice(&triplet);
-        }
-        if let Some(cea708) = &mut self.cea708 {
-            for triplet in cea708.triplets_for(self.frame, self.unix_start) {
-                cc_data.extend_from_slice(&triplet);
-            }
-        }
+        let cc_data = context("encoding a live caption", self.captions.cc_data(self.frame))?;
         if !cc_data.is_empty() {
             ffi::attach_captions(&mut self.picture, &cc_data)?;
         }
@@ -491,12 +466,6 @@ impl LiveMuxer {
         })
     }
 }
-
-/// Seconds between captions appearing on a live stream.
-const CAPTION_INTERVAL_SECONDS: f64 = 3.0;
-
-/// How long each caption stays up, leaving a visible gap before the next.
-const CAPTION_VISIBLE_SECONDS: f64 = 2.5;
 
 /// The muxer's own scratch buffer. Small enough that packets reach a viewer
 /// promptly rather than sitting in ffmpeg waiting for the buffer to fill.

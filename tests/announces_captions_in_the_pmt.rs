@@ -4,6 +4,7 @@
 //! fixture and read the PMT back out of the muxed file.
 
 use fakestream::captions::cea608::ChannelCues;
+use fakestream::captions::feed::CaptionPlan;
 use fakestream::captions::libcaption::Channel;
 use fakestream::captions::script::lorem_cues;
 use fakestream::fixtures::{self, Delivery, Fixture};
@@ -48,11 +49,13 @@ fn fixture(route: &'static str, announce: bool) -> Fixture {
             height: 240,
             duration_seconds: 2.0,
             video_bitrate: 300_000,
-            cea608: vec![ChannelCues {
-                channel: Channel::One,
-                cues: lorem_cues(2.0, 0.5, 0.4),
-            }],
-            cea708: lorem_cues(2.0, 0.5, 0.4),
+            captions: CaptionPlan::Finite {
+                cea608: vec![ChannelCues {
+                    channel: Channel::One,
+                    cues: lorem_cues(2.0, 0.5, 0.4),
+                }],
+                cea708: lorem_cues(2.0, 0.5, 0.4),
+            },
             announce_captions_in_pmt: announce,
             ..ClipSpec::default()
         },
