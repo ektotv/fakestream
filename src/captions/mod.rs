@@ -10,6 +10,7 @@ pub mod cea708;
 pub mod dvb;
 pub mod feed;
 pub mod libcaption;
+pub mod panel;
 pub mod rolling;
 pub mod script;
 pub mod text;

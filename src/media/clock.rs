@@ -82,28 +82,20 @@ pub fn reading(unix_start: f64, frame: u64, fps: i32) -> Reading {
 pub fn render(reading: &Reading, display_width: i32, display_height: i32) -> (Canvas, i32, i32) {
     let font_size = (display_height as f32 / 22.0).round().max(12.0);
     let padding = (display_height as f32 * 0.015).round().max(6.0) as i32;
-    let spacing = crate::captions::text::line_height(font_size);
 
-    let lines = reading.lines();
-    let widest = lines
-        .iter()
-        .map(|line| crate::captions::text::measure(line, font_size))
-        .fold(0.0f32, f32::max);
-
-    let width = widest.ceil() as i32 + padding * 2;
-    let height = (spacing * lines.len() as f32).ceil() as i32 + padding * 2;
-
-    let mut canvas = Canvas::new(width.max(1), height.max(1));
-    canvas.draw_box(2);
-
-    for (index, line) in lines.iter().enumerate() {
-        let baseline = padding as f32 + spacing * (index as f32 + 0.8);
-        canvas.draw_line(line, font_size, padding as f32, baseline);
-    }
+    // The clock reads left to right and sits in a corner, so it is not centred
+    // and not capped to the display.
+    let canvas = crate::captions::panel::render(
+        &reading.lines(),
+        font_size,
+        padding,
+        crate::captions::panel::Align::Left,
+        None,
+    );
 
     let margin = (display_height as f64 * MARGIN_RATIO).round() as i32;
     // Top right, away from the bottom where subtitles sit.
-    let x = display_width - width - margin;
+    let x = display_width - canvas.width - margin;
     (canvas, x.max(0), margin)
 }
 

@@ -5,8 +5,9 @@
 //! blits what we draw. That makes glyph rendering our problem and character set
 //! coverage a non-issue.
 
+use super::panel::{self, Align};
 use super::script::Cue;
-use super::text::{self, Canvas};
+use super::text::Canvas;
 
 /// A caption rendered ready for the encoder.
 pub struct Rendered {
@@ -47,36 +48,20 @@ impl Layout {
 /// which is where a viewer expects subtitles rather than where a caption
 /// standard happens to put them.
 pub fn render(cue: &Cue, layout: &Layout) -> Rendered {
-    let size = layout.font_size;
-    let spacing = text::line_height(size);
-
-    let widest = cue
-        .lines
-        .iter()
-        .map(|line| text::measure(line, size))
-        .fold(0.0f32, f32::max);
-
+    // Subtitles must not run off the display, so the box is capped, and the
+    // lines are centred where a viewer expects captions.
     let max_width = layout.display_width - layout.padding * 4;
-    let width = (widest.ceil() as i32 + layout.padding * 2)
-        .min(max_width)
-        .max(1);
-    let height = (spacing * cue.lines.len() as f32).ceil() as i32 + layout.padding * 2;
-
-    let mut canvas = Canvas::new(width, height);
-    canvas.draw_box(2);
-
-    for (index, line) in cue.lines.iter().enumerate() {
-        let line_width = text::measure(line, size);
-        let origin_x = ((width as f32 - line_width) / 2.0).max(layout.padding as f32);
-        // Baselines step down from the top padding, offset within the line box
-        // so descenders have room.
-        let baseline = layout.padding as f32 + spacing * (index as f32 + 0.8);
-        canvas.draw_line(line, size, origin_x, baseline);
-    }
+    let canvas = panel::render(
+        &cue.lines,
+        layout.font_size,
+        layout.padding,
+        Align::Centre,
+        Some(max_width),
+    );
 
     Rendered {
-        x: (layout.display_width - width) / 2,
-        y: layout.display_height - height - layout.bottom_margin,
+        x: (layout.display_width - canvas.width) / 2,
+        y: layout.display_height - canvas.height - layout.bottom_margin,
         canvas,
     }
 }
@@ -142,11 +127,11 @@ mod tests {
 
         let top = rendered.canvas.pixels[..split]
             .iter()
-            .filter(|p| **p >= text::ink::TEXT_BASE)
+            .filter(|p| **p >= crate::captions::text::ink::TEXT_BASE)
             .count();
         let bottom = rendered.canvas.pixels[split..]
             .iter()
-            .filter(|p| **p >= text::ink::TEXT_BASE)
+            .filter(|p| **p >= crate::captions::text::ink::TEXT_BASE)
             .count();
 
         assert!(top > 0, "nothing drawn in the upper half");
